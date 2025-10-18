@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Тренажёр арабских слов — выбор ответа</title>
+<title>Тренажёр арабских слов — выбор ответа (POS-aware)</title>
 <style>
   body{font-family:Arial,Helvetica,sans-serif;margin:20px;color:#111;background:#fff}
   #main{max-width:900px;margin:0 auto}
@@ -22,7 +22,6 @@
   input[type="text"]{padding:8px;font-size:1rem}
   .controls-row{margin-top:12px}
   .small{font-size:0.95rem;color:#666}
-  /* модалка */
   .overlay{position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,0.38);display:flex;align-items:center;justify-content:center;z-index:10000;padding:20px}
   .modal{background:#fff;border-radius:8px;padding:22px;max-width:820px;width:100%;box-shadow:0 6px 30px rgba(0,0,0,0.25)}
   .modal h2{margin:0 0 8px;font-size:26px}
@@ -37,27 +36,29 @@
   <div id="main">
     <h1>Арабский тренажёр (выбор)</h1>
 
-    <!-- Вставка/загрузка слов -->
     <div id="loader">
       <p class="small">Вставьте список слов (формат: перевод(ы) через запятую - арабская_форма1 - арабская_форма2). Примеры:</p>
       <pre class="small">жаловаться - اِشْتَكَى - يَشْتَكِي
 раз - مَرّةٌ - مَرّاتٌ
 дитя, ребенок - وَلَدٌ</pre>
+
       <textarea id="text-input" placeholder="каждая строка — одно слово с форматом: перевод(ы) - арабская_форма1 - арабская_форма2"></textarea>
+
       <div class="controls-row">
-        <button id="load-list" class="button">Загрузить список</button>
+        <button id="load-list" class="button">Загрузить список вручную</button>
+        <button id="fetch-github" class="button">Загрузить из words.txt</button>
         <span id="count" class="small"></span>
       </div>
+
+      <p class="small">Файл <code>words.txt</code> должен лежать в той же папке, что и <code>index.html</code> (корень репозитория GitHub Pages).</p>
     </div>
 
-    <!-- Кнопки управления -->
     <div id="controls" class="hidden">
       <button id="start-all" class="button">Начать тренировку</button>
       <button id="start-mistakes" class="button hidden">Работа над ошибками</button>
       <button id="reset-btn" class="button">Пройти заново</button>
     </div>
 
-    <!-- Тренажёр -->
     <div id="trainer" class="hidden">
       <div id="progress"></div>
       <div id="arabic-word" aria-live="polite"></div>
@@ -86,20 +87,20 @@
     </div>
   </div>
 
-  <!-- Корень модалки -->
   <div id="modal-root"></div>
 
 <script>
-/* ======= Логика ======= */
-let allWords = [];      // { arabicFull: string, rusVariants: [..] }
-let sessionWords = [];  // текущая сессия (shuffled)
-let mistakes = [];      // ошибки (objects)
+/* ======= Логика с POS-aware distractors ======= */
+let allWords = [];      // { arabicFull, rusVariants:[], rawLine, pos }
+let sessionWords = [];
+let mistakes = [];
 let corrects = [];
 let currentIndex = 0;
 let modalTimer = null;
 
 const textInput = document.getElementById('text-input');
 const loadListBtn = document.getElementById('load-list');
+const fetchGithubBtn = document.getElementById('fetch-github');
 const countP = document.getElementById('count');
 const controls = document.getElementById('controls');
 const startAllBtn = document.getElementById('start-all');
@@ -109,7 +110,6 @@ const resetBtn = document.getElementById('reset-btn');
 const trainer = document.getElementById('trainer');
 const progressDiv = document.getElementById('progress');
 const arabicWordH2 = document.getElementById('arabic-word');
-const choicesDiv = document.getElementById('choices');
 const optButtons = [document.getElementById('opt0'), document.getElementById('opt1'), document.getElementById('opt2')];
 
 const correctListDiv = document.getElementById('correct-list');
@@ -128,22 +128,52 @@ loadListBtn.addEventListener('click', () => {
   startMistakesBtn.classList.add('hidden');
 });
 
+fetchGithubBtn.addEventListener('click', () => {
+  fetch('words.txt').then(resp => {
+    if(!resp.ok) throw new Error(`Ошибка: ${resp.status}`);
+    return resp.text();
+  }).then(text => {
+    textInput.value = text;
+    parseText(text);
+    countP.textContent = `Загружено слов: ${allWords.length}`;
+    controls.classList.remove('hidden');
+    startMistakesBtn.classList.add('hidden');
+    alert('words.txt успешно загружен.');
+  }).catch(err => {
+    console.error(err);
+    alert('Не удалось загрузить words.txt. Убедитесь, что файл существует.');
+  });
+});
+
+/* == POS detection (по русским переводам) ==
+   Простая эвристика: если какой-то перевод заканчивается на типичные глагольные суффиксы -> verb, иначе noun.
+*/
+function detectPOS(rusVars){
+  const verbEndings = ['ться','ться','ть','ить','еть','ать','овать','нуть','ять','тись','иться','оваться'];
+  for(const v of rusVars){
+    const s = v.toLowerCase().trim();
+    for(const e of verbEndings){
+      if(s.endsWith(e)) return 'verb';
+    }
+  }
+  // fallback: если есть запятая и слова вроде "делать" -> verb; но проще: noun
+  return 'noun';
+}
+
 function parseText(text){
   allWords = text.split(/\r?\n/).map(l => l.trim()).filter(l => l).map(line => {
-    // split by first dash (any of - – —)
     const sep = line.search(/[-–—]/);
     const rusPart = sep !== -1 ? line.slice(0, sep).trim() : '';
     const arabPart = sep !== -1 ? line.slice(sep+1).trim() : '';
-    // russian variants split by comma
     const rusVars = rusPart ? rusPart.split(',').map(r => r.trim()).filter(r=>r) : [''];
-    // arabic may contain multiple forms separated by dash as well; but we keep full arabic substring
     const arabFull = arabPart;
-    return { arabicFull: arabFull, rusVariants: rusVars, rawLine: line };
+    const pos = detectPOS(rusVars); // добавляем pos
+    return { arabicFull: arabFull, rusVariants: rusVars, rawLine: line, pos };
   });
 }
 
-// util
-function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]] = [a[j],a[i]]; } }
+/* утилиты */
+function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
 function chooseRandomDifferentIndexes(total, avoidIndex, count){
   const idxs = [];
   for(let i=0;i<total;i++) if(i!==avoidIndex) idxs.push(i);
@@ -151,6 +181,54 @@ function chooseRandomDifferentIndexes(total, avoidIndex, count){
   return idxs.slice(0,count);
 }
 
+/* ===== Новая логика выбора дистракторов по POS =====
+   findDistractorsByPOS(correctIndex, count) -> возвращает массив индексов
+   Сначала ищем кандидатов той же pos, сортируем по совпадению токенов в переводах (похожесть),
+   затем берём верхние. Если не хватает — дополняем случайными элементами.
+*/
+function findDistractorsByPOS(correctIndex, count){
+  const correct = allWords[correctIndex];
+  if(!correct) return chooseRandomDifferentIndexes(allWords.length, correctIndex, count);
+  // собрать кандидатов той же пос
+  const candidates = [];
+  for(let i=0;i<allWords.length;i++){
+    if(i===correctIndex) continue;
+    if(allWords[i].pos === correct.pos) candidates.push(i);
+  }
+  // если нет кандидатов той же POS — fallback на любые
+  if(candidates.length === 0){
+    return chooseRandomDifferentIndexes(allWords.length, correctIndex, count);
+  }
+  // score по числу совпадающих токенов
+  const correctTokens = correct.rusVariants.join(' ').toLowerCase().split(/\W+/).filter(Boolean);
+  const scored = candidates.map(i => {
+    const tokens = allWords[i].rusVariants.join(' ').toLowerCase().split(/\W+/).filter(Boolean);
+    let score = 0;
+    for(const t of tokens) if(correctTokens.includes(t)) score++;
+    return { i, score };
+  });
+  // сортируем по убыванию score
+  scored.sort((a,b) => b.score - a.score);
+  const picks = [];
+  for(const s of scored){
+    if(picks.length >= count) break;
+    picks.push(s.i);
+  }
+  // если не хватило — заполнить случайными кандидатами той же POS (без повторов)
+  shuffle(candidates);
+  for(const c of candidates){
+    if(picks.length >= count) break;
+    if(!picks.includes(c)) picks.push(c);
+  }
+  // если всё ещё мало — дополняем любыми случайными
+  if(picks.length < count){
+    const more = chooseRandomDifferentIndexes(allWords.length, correctIndex, count - picks.length);
+    for(const m of more) if(!picks.includes(m)) picks.push(m);
+  }
+  return picks.slice(0, count);
+}
+
+/* === сессии и UI === */
 startAllBtn.addEventListener('click', ()=> startSession(false));
 startMistakesBtn.addEventListener('click', ()=> {
   if(mistakes.length===0){ alert('Список ошибок пуст.'); return; }
@@ -164,8 +242,8 @@ function startSession(useMistakes=false){
     mistakes = [];
     sessionWords = allWords.slice();
   } else {
-    sessionWords = mistakes.slice(); // work on mistakes
-    mistakes = []; // will be refilled if mistakes again
+    sessionWords = mistakes.slice();
+    mistakes = [];
   }
   shuffle(sessionWords);
   currentIndex = 0;
@@ -180,78 +258,61 @@ function startSession(useMistakes=false){
 function showNext(){
   clearChoiceStyles();
   if(currentIndex >= sessionWords.length){
-    // конец
     progressDiv.textContent = `Готово! Пройдено ${sessionWords.length}/${sessionWords.length}, ошибок: ${mistakes.length}`;
-    // показать итоговые кнопки
     afterSession.classList.remove('hidden');
     finishRetry.classList.remove('hidden');
     goMistakesBtn.classList.toggle('hidden', mistakes.length===0);
-    // показываем "Начать снова" и "Работа над ошибками"
     return;
   }
   const item = sessionWords[currentIndex];
   arabicWordH2.textContent = item.arabicFull || '[нет арабского]';
   progressDiv.textContent = `${currentIndex+1}/${sessionWords.length} слов пройдено – ${mistakes.length} ошибок`;
-  // подготовить варианты: 1 верный, 2 неверных случайных
+
+  // подготовка вариантов: 1 верный (все переводы), 2 неверных (подбор по POS)
   const correctText = item.rusVariants.join(', ');
-  const total = allWords.length;
-  const wrongIdxs = (total <= 1) ? [] : chooseRandomDifferentIndexes(total, allWords.indexOf(item), 2);
-  // если allWords.indexOf(item) не находит (разные объекты), попробуем найти по rawLine
+  // находим индекс этого item в allWords (по rawLine)
   let mainIndex = allWords.findIndex(a => a.rawLine === item.rawLine);
   if(mainIndex === -1){
-    // fallback: try matching arabicFull
     mainIndex = allWords.findIndex(a => a.arabicFull === item.arabicFull && a.rusVariants.join(',') === item.rusVariants.join(','));
   }
-  const wrongIdxs2 = (total <= 1 || mainIndex===-1) ? chooseRandomDifferentIndexes(total, -1, 2) : chooseRandomDifferentIndexes(total, mainIndex, 2);
+  const wrongIdxs = findDistractorsByPOS(mainIndex === -1 ? 0 : mainIndex, 2);
 
   const wrongTexts = [];
-  for(let i=0;i<wrongIdxs2.length;i++){
-    const it = allWords[wrongIdxs2[i]];
-    if(it) wrongTexts.push(it.rusVariants.join(', '));
+  for(let i=0;i<wrongIdxs.length;i++){
+    const it = allWords[wrongIdxs[i]];
+    wrongTexts.push(it ? it.rusVariants.join(', ') : correctText);
   }
-  // if not enough wrongs (very small list) duplicate
   while(wrongTexts.length < 2) wrongTexts.push(correctText);
 
-  // assemble options and shuffle positions
   const options = [correctText, wrongTexts[0], wrongTexts[1]];
   shuffle(options);
-  // fill buttons
+
   optButtons.forEach((btn, idx) => {
-    btn.textContent = options[idx];
+    btn.textContent = options[idx] || '';
     btn.disabled = false;
     btn.classList.remove('correct','wrong');
-    // attach data attribute whether correct
     btn.dataset.correct = (options[idx] === correctText) ? '1' : '0';
   });
 }
 
-// clear highlight classes
-function clearChoiceStyles(){
-  optButtons.forEach(b => { b.classList.remove('correct','wrong'); b.disabled = false; });
-}
+function clearChoiceStyles(){ optButtons.forEach(b => { b.classList.remove('correct','wrong'); b.disabled = false; }); }
 
-// click handlers
 optButtons.forEach(btn => {
   btn.addEventListener('click', (e) => {
     const chosen = e.currentTarget;
     const isCorrect = chosen.dataset.correct === '1';
-    // disable buttons immediately
     optButtons.forEach(b => b.disabled = true);
     if(isCorrect){
       chosen.classList.add('correct');
-      // add to correct list
       const cur = sessionWords[currentIndex];
       correctListDiv.innerHTML = (correctListDiv.innerHTML.trim()==='—' ? '' : correctListDiv.innerHTML) + `<div>${escapeHtml(cur.arabicFull)} → ${escapeHtml(cur.rusVariants.join(', '))}</div>`;
       currentIndex++;
-      // короткая пауза и переход
       setTimeout(()=> showNext(), 700);
     } else {
       chosen.classList.add('wrong');
-      // add to mistakes
       const cur = sessionWords[currentIndex];
       mistakes.push(cur);
       mistakeListDiv.innerHTML = (mistakeListDiv.innerHTML.trim()==='—' ? '' : mistakeListDiv.innerHTML) + `<div>${escapeHtml(cur.arabicFull)} → ${escapeHtml(cur.rusVariants.join(', '))}</div>`;
-      // показать модалку с правильным ответом; после закрытия — следующий
       showWrongModal(cur.arabicFull, cur.rusVariants.join(', '), () => {
         currentIndex++;
         showNext();
@@ -260,7 +321,6 @@ optButtons.forEach(btn => {
   });
 });
 
-// modal implementation (close by button or Esc, autohide 17s)
 function showWrongModal(arabicText, ruText, onClose){
   closeModal();
   const root = document.getElementById('modal-root');
@@ -272,30 +332,16 @@ function showWrongModal(arabicText, ruText, onClose){
     <div class="controls"><button id="modal-close-btn" class="close-btn">Закрыть (Esc)</button></div>`;
   overlay.appendChild(modal);
   root.appendChild(overlay);
-  function cleanup(){
-    if(modalTimer){ clearTimeout(modalTimer); modalTimer = null; }
-    document.removeEventListener('keydown', onKey);
-    const btn = document.getElementById('modal-close-btn'); if(btn) btn.removeEventListener('click', onBtn);
-    if(overlay.parentNode) overlay.parentNode.removeChild(overlay);
-  }
+  function cleanup(){ if(modalTimer){ clearTimeout(modalTimer); modalTimer = null; } document.removeEventListener('keydown', onKey); const btn = document.getElementById('modal-close-btn'); if(btn) btn.removeEventListener('click', onBtn); if(overlay.parentNode) overlay.parentNode.removeChild(overlay); }
   function onKey(e){ if(e.key === 'Escape'){ cleanup(); if(typeof onClose==='function') onClose(); } }
   function onBtn(){ cleanup(); if(typeof onClose==='function') onClose(); }
   document.addEventListener('keydown', onKey);
   const btn = document.getElementById('modal-close-btn'); if(btn) btn.addEventListener('click', onBtn);
   modalTimer = setTimeout(()=>{ cleanup(); if(typeof onClose==='function') onClose(); }, 17000);
 }
-
 function closeModal(){ const root = document.getElementById('modal-root'); root.innerHTML=''; if(modalTimer){ clearTimeout(modalTimer); modalTimer=null; } }
-
-finishRetry.addEventListener('click', ()=> {
-  // начать заново (взяь из allWords)
-  startSession(false);
-});
-goMistakesBtn.addEventListener('click', ()=> {
-  if(mistakes.length===0) alert('Ошибок нет'); else startSession(true);
-});
-
-// small helper
+finishRetry.addEventListener('click', ()=> { startSession(false); });
+goMistakesBtn.addEventListener('click', ()=> { if(mistakes.length===0) alert('Ошибок нет'); else startSession(true); });
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 </script>
