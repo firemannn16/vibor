@@ -3,21 +3,21 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Арабский тренажёр — выбор ответов</title>
+<title>Арабский тренажёр</title>
 <style>
-  body{font-family:Arial,Helvetica,sans-serif;margin:20px;color:#111;background:#fff}
-  #container{max-width:920px;margin:0 auto}
+  body{font-family:Arial,Helvetica,sans-serif;margin:18px;color:#111;background:#fff}
+  #container{max-width:980px;margin:0 auto}
   .hidden{display:none}
   .button{padding:10px 14px;margin:6px;font-size:1rem;cursor:pointer;border-radius:6px;border:1px solid #bbb;background:#f6f6f6}
-  h1{font-size:2rem;margin:0 0 6px}
+  h1{font-size:2rem;margin:4px 0}
   #progress{margin:12px 0;color:#333}
-  #arabic-word{font-size:2.6rem;padding:20px 12px;background:#fff;border-radius:8px;border:1px solid #eee;text-align:center;direction:rtl;margin:12px 0;line-height:1.1}
+  #arabic-word{font-size:2.6rem;padding:20px;background:#fff;border-radius:10px;border:1px solid #eee;text-align:center;direction:rtl;margin:12px 0;line-height:1.1}
   .choices{display:flex;flex-direction:column;gap:14px;margin-top:14px}
   .choice-btn{padding:18px;border-radius:12px;border:1px solid #e0e0e0;background:#fff;font-size:1.6rem;text-align:center;cursor:pointer}
   .choice-btn.correct{background:#d9f7e0;border-color:#8ad39f}
   .choice-btn.wrong{background:#ffdede;border-color:#ff8a8a}
   #lists{display:flex;gap:20px;margin-top:18px;flex-wrap:wrap}
-  #correct-list,#mistake-list{flex:1 1 320px;min-height:80px;background:#fafafa;padding:10px;border-radius:6px;border:1px solid #eee;max-height:240px;overflow:auto}
+  #correct-list,#mistake-list{flex:1 1 320px;min-height:80px;background:#fafafa;padding:10px;border-radius:6px;border:1px solid #eee;max-height:280px;overflow:auto}
   textarea{width:100%;height:140px;padding:8px;font-size:1rem}
   .controls-row{margin-top:12px}
   .small{font-size:0.95rem;color:#666}
@@ -32,50 +32,48 @@
   /* intro (дуа) */
   #intro {border:1px solid #eee;border-radius:10px;padding:20px;margin-bottom:16px;background:#fff}
   #intro blockquote{direction:rtl;font-size:2.2rem;margin:12px 0}
-  @media(max-width:560px){ .choice-btn{font-size:1.25rem;padding:14px} #arabic-word{font-size:2.2rem;padding:14px} .modal .answer{font-size:18px} }
+  .top-controls{margin-top:12px}
+  @media(max-width:560px){ .choice-btn{font-size:1.25rem;padding:14px} #arabic-word{font-size:2rem;padding:14px} .modal .answer{font-size:18px} }
 </style>
 </head>
 <body>
   <div id="container">
-    <!-- Intro (дуа) -->
     <div id="intro">
       <h1>Перед началом тренировок</h1>
       <p>Дуа:</p>
       <blockquote>رَّبِّ زِدْنِى عِلْمًۭا</blockquote>
       <p>Перевод: «Господь мой! Приумножь мои знания»</p>
-      <div style="margin-top:12px">
+      <div class="top-controls">
         <button id="did-dua" class="button">Я сделал дуа</button>
       </div>
     </div>
 
-    <!-- Загрузка слов / управление -->
     <div id="loader" class="hidden">
-      <p class="small">Список слов: формат — перевод(ы) через запятую - арабская_форма1 - арабская_форма2</p>
+      <p class="small">Список слов (формат строки): перевод(ы через запятую) - арабская_форма1 - арабская_форма2</p>
       <textarea id="text-input" placeholder="пример: жаловаться - اِشْتَكَى - يَشْتَكِي"></textarea>
       <div class="controls-row">
         <button id="load-manual" class="button">Загрузить вручную</button>
-        <button id="fetch-file" class="button">Автозагрузить из words.txt</button>
+        <button id="fetch-file" class="button">Загрузить из words.txt</button>
         <span id="count" class="small"></span>
       </div>
-
-      <div style="margin-top:8px">
-        <button id="start-btn" class="button hidden">Начать тренировку</button>
-        <!-- кнопки, которые пользователь просил рядом -->
-        <button id="add-new-btn" class="button" title="Добавить новые слова из words.txt">Добавить новые слова</button>
-        <button id="reset-progress-btn" class="button" title="Сбросить прогресс (очистка текущей сессии)">Сбросить прогресс</button>
-        <button id="copy-mistakes-btn" class="button" title="Копировать ошибки в буфер">Копировать ошибки</button>
-      </div>
+      <p class="small">Файл <code>words.txt</code> должен быть в той же папке, что и <code>index.html</code>.</p>
     </div>
 
-    <!-- Тренажёр -->
     <div id="trainer" class="hidden" aria-live="polite">
-      <div id="progress"></div>
-      <div id="arabic-word"></div>
+      <div id="progress">0/0 слов пройдено – 0 ошибок</div>
+
+      <div id="arabic-word" aria-live="polite"></div>
 
       <div class="choices" id="choices">
         <button class="choice-btn" id="opt0"></button>
         <button class="choice-btn" id="opt1"></button>
         <button class="choice-btn" id="opt2"></button>
+      </div>
+
+      <div class="top-controls" style="margin-top:14px">
+        <button id="add-new-btn" class="button">Добавить новые слова</button>
+        <button id="reset-progress-btn" class="button">Сбросить прогресс</button>
+        <button id="copy-mistakes-btn" class="button">Копировать ошибки</button>
       </div>
 
       <div id="lists">
@@ -99,15 +97,19 @@
   <div id="modal-root"></div>
 
 <script>
-/* ====== Переменные ====== */
+/* ========== Настройки и key ========== */
+const STORAGE_KEY = 'arabic_trainer_state_v1'; // не менять, если не хотим потерять прогресс
+const AUTO_MODAL_CLOSE_MS = 17000;
+
+/* ========== Состояния ========== */
 let allWords = [];      // { arabicFull, rusVariants:[], rawLine, pos }
-let sessionWords = [];  // очередь для текущей сессии (объекты)
+let sessionWords = [];  // очередная сессия (массив объектов)
 let mistakes = [];      // объекты
 let corrects = [];
 let currentIndex = 0;
 let modalTimer = null;
 
-/* ====== Элементы ====== */
+/* ========== DOM ========== */
 const intro = document.getElementById('intro');
 const didDuaBtn = document.getElementById('did-dua');
 
@@ -115,17 +117,16 @@ const loader = document.getElementById('loader');
 const textInput = document.getElementById('text-input');
 const loadManualBtn = document.getElementById('load-manual');
 const fetchFileBtn = document.getElementById('fetch-file');
-const startBtn = document.getElementById('start-btn');
 const countSpan = document.getElementById('count');
-
-const addNewBtn = document.getElementById('add-new-btn');
-const resetProgressBtn = document.getElementById('reset-progress-btn');
-const copyMistakesBtn = document.getElementById('copy-mistakes-btn');
 
 const trainer = document.getElementById('trainer');
 const progressDiv = document.getElementById('progress');
 const arabicWordDiv = document.getElementById('arabic-word');
 const optButtons = [document.getElementById('opt0'), document.getElementById('opt1'), document.getElementById('opt2')];
+
+const addNewBtn = document.getElementById('add-new-btn');
+const resetProgressBtn = document.getElementById('reset-progress-btn');
+const copyMistakesBtn = document.getElementById('copy-mistakes-btn');
 
 const correctListDiv = document.getElementById('correct-list');
 const mistakeListDiv = document.getElementById('mistake-list');
@@ -136,16 +137,7 @@ const workMistakesBtn = document.getElementById('work-mistakes');
 
 const modalRoot = document.getElementById('modal-root');
 
-/* ====== События intro ====== */
-didDuaBtn.addEventListener('click', () => {
-  // скрыть intro и показать loader (автозагрузка попытается выполниться)
-  intro.classList.add('hidden');
-  loader.classList.remove('hidden');
-  // запустить автозагрузку words.txt (если доступен)
-  autoFetchWords();
-});
-
-/* ====== Парсер и POS (эвристика) ====== */
+/* ========== Парсер + POS (эвристика) ========== */
 function detectPOS(rusVars){
   const verbEndings = ['ться','ть','ить','еть','ать','овать','нуть','ять','тись','иться','оваться','ся'];
   for(const v of rusVars){
@@ -157,8 +149,8 @@ function detectPOS(rusVars){
   return 'noun';
 }
 
-function parseText(text){
-  allWords = text.split(/\r?\n/).map(l => l.trim()).filter(l => l).map(line => {
+function parseTextToWords(text){
+  return text.split(/\r?\n/).map(l => l.trim()).filter(l => l).map(line => {
     const sep = line.search(/[-–—]/);
     const rusPart = sep !== -1 ? line.slice(0, sep).trim() : '';
     const arabPart = sep !== -1 ? line.slice(sep+1).trim() : '';
@@ -169,54 +161,151 @@ function parseText(text){
   });
 }
 
-/* ====== Утилиты ====== */
+/* ========== Утилиты ========== */
 function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-/* ====== Загрузка / автозагрузка words.txt ====== */
-function autoFetchWords(){
-  // попытаемся получить words.txt автоматически
-  fetch('words.txt').then(r => {
+/* ========== Сохранение / Восстановление состояния ========== */
+function saveState(){
+  try {
+    const state = {
+      allRaw: allWords.map(w => w.rawLine),
+      sessionRaw: sessionWords.map(w => w.rawLine),
+      currentIndex,
+      mistakesRaw: mistakes.map(w => w.rawLine),
+      correctsRaw: corrects.map(w => w.rawLine)
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch(e){
+    console.error('saveState error', e);
+  }
+}
+
+function loadStateIfExists(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(!raw) return null;
+    const st = JSON.parse(raw);
+    return st;
+  } catch(e){
+    console.error('loadState error', e);
+    return null;
+  }
+}
+
+function restoreStateAfterLoad(){
+  const st = loadStateIfExists();
+  if(!st) return false;
+  // map rawLines in st.allRaw to current allWords (if missing, try to parse that rawLine into object)
+  const rawMap = new Map(allWords.map(w => [w.rawLine, w]));
+  // rebuild allWords to include any saved lines not present now
+  for(const rawLine of st.allRaw){
+    if(!rawMap.has(rawLine)){
+      // parse a single line and add
+      const parsed = parseTextToWords(rawLine)[0];
+      allWords.push(parsed);
+      rawMap.set(rawLine, parsed);
+    }
+  }
+  // rebuild sessionWords, mistakes, corrects by mapping raw strings to objects
+  sessionWords = st.sessionRaw.map(r => rawMap.get(r) || parseTextToWords(r)[0]).filter(Boolean);
+  mistakes = st.mistakesRaw.map(r => rawMap.get(r) || parseTextToWords(r)[0]).filter(Boolean);
+  corrects = st.correctsRaw.map(r => rawMap.get(r) || parseTextToWords(r)[0]).filter(Boolean);
+  currentIndex = Math.min(st.currentIndex || 0, sessionWords.length);
+  return true;
+}
+
+/* ========== Автозагрузка words.txt (если есть) и восстановление состояния ========== */
+function tryAutoLoadWordsAndRestore(){
+  return fetch('words.txt').then(r => {
     if(!r.ok) throw new Error('no file');
     return r.text();
   }).then(txt => {
-    textInput.value = txt;
-    parseText(txt);
+    allWords = parseTextToWords(txt);
     countSpan.textContent = `Загружено слов: ${allWords.length}`;
-    // показываем кнопки управления
-    startBtn.classList.remove('hidden');
-    // если хотим автоматически стартовать — можно раскомментировать:
-    // startSession(false);
+    // попробуем восстановить состояние
+    const restored = restoreStateAfterLoad();
+    if(restored){
+      // если восстановили, откроем тренажёр (как было)
+      loader.classList.add('hidden');
+      trainer.classList.remove('hidden');
+      // fill lists UI
+      renderLists();
+      renderProgress();
+      showCurrent();
+    } else {
+      // не было сохранённого состояния — только показываем загрузчик (пользователь нажал дуа => стартим)
+      // автоматически стартуем сессию сразу после дуа (если пользователь нажал)
+      startSession(false);
+    }
   }).catch(err => {
-    // если нет файла — ничего страшного, пользователь загрузит вручную
-    console.log('words.txt не найден или недоступен:', err);
+    // words.txt нет либо fetch запрещён — оставляем возможность ручной загрузки
+    console.log('words.txt not loaded:', err);
+    // если есть saved state even without file, try to restore from stored allRaw
+    const st = loadStateIfExists();
+    if(st){
+      // rebuild allWords from stored raw lines
+      allWords = st.allRaw.map(r => parseTextToWords(r)[0]);
+      // restore using function
+      restoreStateAfterLoad();
+      loader.classList.add('hidden');
+      trainer.classList.remove('hidden');
+      renderLists();
+      renderProgress();
+      showCurrent();
+    } else {
+      // show loader so user can paste list manually
+      loader.classList.remove('hidden');
+    }
   });
 }
 
-/* кнопка ручной загрузки */
+/* ========== Загрузка вручную ========== */
 loadManualBtn.addEventListener('click', () => {
-  const text = textInput.value;
-  if(!text.trim()) return alert('Вставьте список слов.');
-  parseText(text);
+  const txt = textInput.value;
+  if(!txt.trim()) return alert('Вставьте текст списка слов.');
+  allWords = parseTextToWords(txt);
   countSpan.textContent = `Загружено слов: ${allWords.length}`;
-  startBtn.classList.remove('hidden');
+  saveStateIfFreshAll(); // merge with saved if empty
+  startSession(false);
 });
 
-/* кнопка загрузки words.txt вручную */
+/* helper: if no saved state, save initial allWords so persistence works */
+function saveStateIfFreshAll(){
+  const st = loadStateIfExists();
+  if(!st){
+    // create initial state
+    sessionWords = allWords.slice();
+    currentIndex = 0;
+    mistakes = [];
+    corrects = [];
+    saveState();
+  }
+}
+
+/* ========== Кнопка загрузить words.txt (ручная) ========== */
 fetchFileBtn.addEventListener('click', () => {
   fetch('words.txt').then(r => {
     if(!r.ok) throw new Error('Ошибка загрузки');
     return r.text();
   }).then(txt => {
-    textInput.value = txt;
-    parseText(txt);
+    allWords = parseTextToWords(txt);
     countSpan.textContent = `Загружено слов: ${allWords.length}`;
-    startBtn.classList.remove('hidden');
-    alert('words.txt загружен');
+    // если есть сохранённое состояние — попытаемся восстановить и продолжить, иначе стартуем новую сессию
+    const restored = restoreStateAfterLoad();
+    if(restored){
+      loader.classList.add('hidden');
+      trainer.classList.remove('hidden');
+      renderLists();
+      renderProgress();
+      showCurrent();
+    } else {
+      startSession(false);
+    }
   }).catch(e => { console.error(e); alert('Не удалось загрузить words.txt'); });
 });
 
-/* ====== Добавить новые слова (не сбрасывая сессию) ====== */
+/* ========== Добавить новые слова (не сбрасывая прогресс) ========== */
 addNewBtn.addEventListener('click', () => {
   fetch('words.txt').then(r => {
     if(!r.ok) throw new Error('Ошибка загрузки');
@@ -224,49 +313,41 @@ addNewBtn.addEventListener('click', () => {
   }).then(txt => {
     const newLines = txt.split(/\r?\n/).map(l=>l.trim()).filter(l=>l);
     let added = 0;
+    const existing = new Set(allWords.map(w => w.rawLine));
     for(const ln of newLines){
-      if(!allWords.some(w => w.rawLine === ln)){
-        // парсим одну строку и добавляем
-        const sep = ln.search(/[-–—]/);
-        const rusPart = sep !== -1 ? ln.slice(0, sep).trim() : '';
-        const arabPart = sep !== -1 ? ln.slice(sep+1).trim() : '';
-        const rusVars = rusPart ? rusPart.split(',').map(r => r.trim()).filter(r=>r) : [''];
-        const pos = detectPOS(rusVars);
-        const obj = { arabicFull: arabPart, rusVariants: rusVars, rawLine: ln, pos };
+      if(!existing.has(ln)){
+        const obj = parseTextToWords(ln)[0];
         allWords.push(obj);
-        // если сессия идёт — вставим новый объект в случайную позицию после текущего индекса
-        if(sessionWords.length){
-          const insertPos = currentIndex + 1 + Math.floor(Math.random() * (sessionWords.length - currentIndex + 1));
-          sessionWords.splice(insertPos, 0, obj);
+        // если тренировка идёт, вставляем в случайную позицию после текущIndex
+        if(trainer.classList.contains('hidden') === false && sessionWords.length>0){
+          const pos = currentIndex + 1 + Math.floor(Math.random() * (sessionWords.length - currentIndex + 1));
+          sessionWords.splice(pos, 0, obj);
+        } else {
+          // если тренажёр не запущен, добавляем к sessionWords baseline
+          sessionWords.push(obj);
         }
         added++;
       }
     }
     countSpan.textContent = `Загружено слов: ${allWords.length}`;
+    saveState(); // обновляем сохранение
     alert(`Добавлено новых слов: ${added}`);
   }).catch(e => { console.error(e); alert('Не удалось загрузить words.txt'); });
 });
 
-/* ====== Сессия: старт/логика ====== */
-startBtn.addEventListener('click', () => startSession(false));
-retryAllBtn.addEventListener('click', () => startSession(false));
-workMistakesBtn.addEventListener('click', () => {
-  if(mistakes.length === 0) return alert('Ошибок нет');
-  startSession(true);
-});
-
+/* ========== Сессия: старт/логика ========= */
 function startSession(useMistakes=false){
-  corrects = [];
+  if(allWords.length === 0){
+    alert('Список слов пуст. Сначала загрузите words.txt или вставьте список вручную.');
+    loader.classList.remove('hidden'); trainer.classList.add('hidden'); return;
+  }
   if(!useMistakes){
     mistakes = [];
+    corrects = [];
     sessionWords = allWords.slice();
   } else {
     sessionWords = mistakes.slice();
     mistakes = [];
-  }
-  if(sessionWords.length === 0){
-    alert('Список слов пуст. Сначала загрузите words.txt или вставьте список.');
-    return;
   }
   shuffle(sessionWords);
   currentIndex = 0;
@@ -275,62 +356,54 @@ function startSession(useMistakes=false){
   loader.classList.add('hidden');
   trainer.classList.remove('hidden');
   afterDiv.classList.add('hidden');
-  showNext();
+  renderProgress();
+  showCurrent();
+  saveState();
 }
 
-/* ====== Подбор неправильных вариантов (рандомно, в идеале той же POS) ====== */
-function findDistractorsRandom(correctIndex, count){
-  const correct = allWords[correctIndex];
-  const candidatesSamePos = [];
-  for(let i=0;i<allWords.length;i++){
-    if(i === correctIndex) continue;
-    if(allWords[i].pos === correct.pos) candidatesSamePos.push(i);
+retryAllBtn.addEventListener('click', ()=> startSession(false));
+workMistakesBtn.addEventListener('click', ()=> {
+  if(mistakes.length === 0){ alert('Ошибок нет'); return; }
+  startSession(true);
+});
+
+/* ========== Выбор дистракторов: строгая POS-логика ========= */
+function findDistractorsFor(correctObj, count){
+  // ищем индексы в allWords с той же pos (исключая сам correctObj)
+  const same = allWords.filter(w => w.pos === correctObj.pos && w.rawLine !== correctObj.rawLine);
+  // если достаточно, возьмём случайные count из same
+  if(same.length >= count){
+    shuffle(same);
+    return same.slice(0,count);
   }
-  // если есть кандидаты той же POS, возьмём оттуда рандомно
-  if(candidatesSamePos.length >= count){
-    shuffle(candidatesSamePos);
-    return candidatesSamePos.slice(0,count);
-  }
-  // иначе смешаем: добавим все samePos, затем добавим случайных из остальных
-  const picks = candidatesSamePos.slice();
-  const others = [];
-  for(let i=0;i<allWords.length;i++){
-    if(i === correctIndex) continue;
-    if(!picks.includes(i)) others.push(i);
-  }
+  // иначе: сначала все same, затем случайные из остальных (без дубликатов)
+  const picks = same.slice();
+  const others = allWords.filter(w => w.rawLine !== correctObj.rawLine && !picks.includes(w));
   shuffle(others);
   while(picks.length < count && others.length) picks.push(others.shift());
+  // если всё ещё мало (очень маленький словарь) — дублируем correct (не идеально, но безопасно)
+  while(picks.length < count) picks.push(correctObj);
   return picks.slice(0,count);
 }
 
-/* найти индекс item в allWords (по rawLine или полям) */
-function findIndexInAll(item){
-  let idx = allWords.findIndex(a => a.rawLine === item.rawLine);
-  if(idx !== -1) return idx;
-  idx = allWords.findIndex(a => a.arabicFull === item.arabicFull && a.rusVariants.join(',') === item.rusVariants.join(','));
-  return idx;
-}
-
-/* показать следующий */
-function showNext(){
+/* ========== Показ текущего слова и вариантов ========= */
+function showCurrent(){
   clearChoiceStyles();
   if(currentIndex >= sessionWords.length){
     progressDiv.textContent = `Готово! Пройдено ${sessionWords.length}/${sessionWords.length}, ошибок: ${mistakes.length}`;
     afterDiv.classList.remove('hidden');
     workMistakesBtn.classList.toggle('hidden', mistakes.length === 0);
+    saveState();
     return;
   }
   const item = sessionWords[currentIndex];
   arabicWordDiv.textContent = item.arabicFull || '[нет арабского]';
-  progressDiv.textContent = `${currentIndex+1}/${sessionWords.length} слов пройдено – ${mistakes.length} ошибок`;
+  renderProgress();
 
   const correctText = item.rusVariants.join(', ');
-  const mainIndex = findIndexInAll(item);
-  const wrongIdxs = (mainIndex === -1) ? findDistractorsRandom(0,2) : findDistractorsRandom(mainIndex, 2);
-  const wrongTexts = wrongIdxs.map(i => allWords[i] ? allWords[i].rusVariants.join(', ') : correctText);
-  while(wrongTexts.length < 2) wrongTexts.push(correctText);
-
-  const options = [correctText, wrongTexts[0], wrongTexts[1]];
+  // distractors: объекты
+  const distractors = findDistractorsFor(item, 2);
+  const options = [correctText, distractors[0].rusVariants.join(', '), distractors[1].rusVariants.join(', ')];
   shuffle(options);
   optButtons.forEach((btn, idx) => {
     btn.textContent = options[idx] || '';
@@ -338,38 +411,36 @@ function showNext(){
     btn.classList.remove('correct','wrong');
     btn.dataset.correct = (options[idx] === correctText) ? '1' : '0';
   });
+  saveState();
 }
 
-/* сброс стилей опций */
-function clearChoiceStyles(){
-  optButtons.forEach(b => { b.classList.remove('correct','wrong'); b.disabled = false; });
-}
-
-/* клики по вариантам */
+/* ========== Клики по вариантам ========= */
 optButtons.forEach(btn => {
-  btn.addEventListener('click', e => {
+  btn.addEventListener('click', (e) => {
     const chosen = e.currentTarget;
-    const correct = chosen.dataset.correct === '1';
+    const isCorrect = chosen.dataset.correct === '1';
     optButtons.forEach(b => b.disabled = true);
     const cur = sessionWords[currentIndex];
-    if(correct){
+    if(isCorrect){
       chosen.classList.add('correct');
       correctListDiv.innerHTML = (correctListDiv.innerHTML.trim()==='—' ? '' : correctListDiv.innerHTML) + `<div>${escapeHtml(cur.arabicFull)} → ${escapeHtml(cur.rusVariants.join(', '))}</div>`;
+      corrects.push(cur);
       currentIndex++;
-      setTimeout(() => showNext(), 700);
+      setTimeout(() => { showCurrent(); }, 600);
     } else {
       chosen.classList.add('wrong');
       mistakes.push(cur);
       mistakeListDiv.innerHTML = (mistakeListDiv.innerHTML.trim()==='—' ? '' : mistakeListDiv.innerHTML) + `<div>${escapeHtml(cur.arabicFull)} → ${escapeHtml(cur.rusVariants.join(', '))}</div>`;
       showWrongModal(cur.arabicFull, cur.rusVariants.join(', '), () => {
         currentIndex++;
-        showNext();
+        showCurrent();
       });
     }
+    saveState();
   });
 });
 
-/* модалка при ошибке с Esc и автозакрытием 17с */
+/* ========== Модалка при ошибке ========= */
 function showWrongModal(arabicText, ruText, onClose){
   closeModal();
   const overlay = document.createElement('div'); overlay.className = 'overlay';
@@ -387,46 +458,127 @@ function showWrongModal(arabicText, ruText, onClose){
 
   document.addEventListener('keydown', onKey);
   const btn = document.getElementById('modal-close-btn'); if(btn) btn.addEventListener('click', onBtn);
-  modalTimer = setTimeout(() => { cleanup(); if(typeof onClose === 'function') onClose(); }, 17000);
+  modalTimer = setTimeout(()=>{ cleanup(); if(typeof onClose === 'function') onClose(); }, AUTO_MODAL_CLOSE_MS);
 }
+
 function closeModal(){ modalRoot.innerHTML = ''; if(modalTimer){ clearTimeout(modalTimer); modalTimer = null; } }
 
-/* ====== Копирование ошибок (оригинальные строки) ====== */
+/* ========== Копировать ошибки (raw lines) ========= */
 copyMistakesBtn.addEventListener('click', () => {
   if(mistakes.length === 0) return alert('Ошибок пока нет.');
   const text = mistakes.map(m => m.rawLine).join('\n');
-  navigator.clipboard.writeText(text).then(() => {
-    alert('Ошибки скопированы в буфер обмена.');
-  }).catch(err => {
-    console.error(err);
-    alert('Не удалось скопировать ошибки (браузер не разрешил доступ).');
-  });
+  navigator.clipboard.writeText(text).then(()=> alert('Ошибки скопированы в буфер обмена')).catch(e => { console.error(e); alert('Не удалось скопировать (браузер не разрешил).'); });
 });
 
-/* ====== Сброс прогресса (локальный) ====== */
+/* ========== Сброс прогресса (полный) ========= */
 resetProgressBtn.addEventListener('click', () => {
-  if(!confirm('Сбросить прогресс текущей сессии? Это очистит список ошибок и начнёт с начала.')) return;
-  // очистим текущую сессию и ошибки, вернёмся на загрузку
+  if(!confirm('Сбросить прогресс? Это очистит ошибки и текущую сессию.')) return;
+  // clear saved state
+  try{ localStorage.removeItem(STORAGE_KEY); } catch(e){ console.error(e); }
+  // reset memory
   sessionWords = [];
   mistakes = [];
   corrects = [];
   currentIndex = 0;
   correctListDiv.innerHTML = '';
   mistakeListDiv.innerHTML = '';
+  // show loader so user can decide
   trainer.classList.add('hidden');
   loader.classList.remove('hidden');
-  startBtn.classList.remove('hidden');
+  // keep allWords as-is (so user can restart without reuploading)
   countSpan.textContent = `Загружено слов: ${allWords.length}`;
 });
 
-/* ====== Вспомогательные ====== */
-function escapeHtmlSimple(s){ return escapeHtml(s); } // алиас
-function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+/* ========== Вспомогательные UI ========== */
+function renderProgress(){
+  progressDiv.textContent = `${Math.min(currentIndex, sessionWords.length)}/${sessionWords.length} слов пройдено – ${mistakes.length} ошибок`;
+}
+function renderLists(){
+  correctListDiv.innerHTML = corrects.length ? corrects.map(c => `<div>${escapeHtml(c.arabicFull)} → ${escapeHtml(c.rusVariants.join(', '))}</div>`).join('') : '—';
+  mistakeListDiv.innerHTML = mistakes.length ? mistakes.map(c => `<div>${escapeHtml(c.arabicFull)} → ${escapeHtml(c.rusVariants.join(', '))}</div>`).join('') : '—';
+}
 
-/* ====== Автозапуск (если words.txt есть) - попытка ранее уже вызвана при наж. дуа,
-           но на случай если пользователь сразу прошёл intro (или refresh) — попробуем */ 
-// (этот автоFetch уже запускается при нажатии "Я сделал дуа")
-/* ====== Конец скрипта ====== */
+/* ========== Восстановление / автозапуск ========== */
+didDuaBtn.addEventListener('click', () => {
+  // скрываем intro и показываем loader (и пытаемся автоматически загрузить words.txt)
+  intro.classList.add('hidden');
+  loader.classList.remove('hidden');
+  // try to auto load words and restore state
+  tryAutoLoadWordsAndRestore();
+});
+
+/* helper to try auto load and if no saved state start fresh session */
+function tryAutoLoadWordsAndRestore(){
+  tryAutoLoadWordsAndRestoreImpl();
+}
+function tryAutoLoadWordsAndRestoreImpl(){
+  fetch('words.txt').then(r => {
+    if(!r.ok) throw new Error('no file');
+    return r.text();
+  }).then(txt => {
+    allWords = parseTextToWords(txt);
+    countSpan.textContent = `Загружено слов: ${allWords.length}`;
+    const restored = restoreStateAfterLoad();
+    if(restored){
+      // restored -> show trainer and continue
+      loader.classList.add('hidden');
+      trainer.classList.remove('hidden');
+      renderLists();
+      renderProgress();
+      showCurrent();
+    } else {
+      // no saved state -> start session immediately
+      startSession(false);
+    }
+  }).catch(err => {
+    // if cannot fetch file, but saved state exists, restore from localStorage
+    const st = loadStateIfExists();
+    if(st){
+      // rebuild allWords from saved list
+      allWords = st.allRaw.map(r => parseTextToWords(r)[0]);
+      restoreStateAfterLoad();
+      loader.classList.add('hidden');
+      trainer.classList.remove('hidden');
+      renderLists();
+      renderProgress();
+      showCurrent();
+    } else {
+      // else show loader so user can paste the list
+      loader.classList.remove('hidden');
+    }
+  });
+}
+
+/* ========== Найденный ранее helper restore function (повторяем) ========== */
+function restoreStateAfterLoad(){
+  const st = loadStateIfExists();
+  if(!st) return false;
+  const rawMap = new Map(allWords.map(w => [w.rawLine, w]));
+  // include any saved raw which are not in allWords
+  for(const rawLine of st.allRaw){
+    if(!rawMap.has(rawLine)){
+      const parsed = parseTextToWords(rawLine)[0];
+      allWords.push(parsed);
+      rawMap.set(rawLine, parsed);
+    }
+  }
+  sessionWords = st.sessionRaw.map(r => rawMap.get(r) || parseTextToWords(r)[0]).filter(Boolean);
+  mistakes = st.mistakesRaw.map(r => rawMap.get(r) || parseTextToWords(r)[0]).filter(Boolean);
+  corrects = st.correctsRaw.map(r => rawMap.get(r) || parseTextToWords(r)[0]).filter(Boolean);
+  currentIndex = Math.min(st.currentIndex || 0, sessionWords.length);
+  return true;
+}
+
+/* ========== Сохранение состояния периодически (и при unload) ========== */
+window.addEventListener('beforeunload', saveState);
+window.addEventListener('visibilitychange', () => { if(document.visibilityState === 'hidden') saveState(); });
+
+/* ========== Начальное поведение: если есть saved state, покажем loader (intro handled by user) ========= */
+(function initOnLoad(){
+  // nothing: we wait for user to press "Я сделал дуа", which triggers auto load and restore
+  // But if user directly refreshes inside trainer, restoreState is handled above when didDua was clicked previously
+})();
+
 </script>
 </body>
 </html>
