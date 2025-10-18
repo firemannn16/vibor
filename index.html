@@ -56,7 +56,7 @@
         <button id="fetch-file" class="button">Загрузить из words.txt</button>
         <span id="count" class="small"></span>
       </div>
-      <p class="small">Файл <code>words.txt</code> должен быть в той же папке, что и <code>index.html</code>.</p>
+      <p class="small">Файл <code>words.txt</code> должен быть в той же папке, что и <code>index.html</code> (корень репозитория).</p>
     </div>
 
     <div id="trainer" class="hidden" aria-live="polite">
@@ -97,19 +97,19 @@
   <div id="modal-root"></div>
 
 <script>
-/* ========== Настройки и key ========== */
-const STORAGE_KEY = 'arabic_trainer_state_v1'; // не менять, если не хотим потерять прогресс
+/* ================== Конфиги ================== */
+const STORAGE_KEY = 'arabic_trainer_state_v1';
 const AUTO_MODAL_CLOSE_MS = 17000;
 
-/* ========== Состояния ========== */
+/* ================== Состояние ================== */
 let allWords = [];      // { arabicFull, rusVariants:[], rawLine, pos }
-let sessionWords = [];  // очередная сессия (массив объектов)
-let mistakes = [];      // объекты
+let sessionWords = [];
+let mistakes = [];
 let corrects = [];
 let currentIndex = 0;
 let modalTimer = null;
 
-/* ========== DOM ========== */
+/* ================== DOM ================== */
 const intro = document.getElementById('intro');
 const didDuaBtn = document.getElementById('did-dua');
 
@@ -137,7 +137,20 @@ const workMistakesBtn = document.getElementById('work-mistakes');
 
 const modalRoot = document.getElementById('modal-root');
 
-/* ========== Парсер + POS (эвристика) ========== */
+/* ================== Утилиты парсинга/нормализации ================== */
+function normalizeLine(line){
+  if(!line) return '';
+  // BOM
+  line = line.replace(/^\uFEFF/, '');
+  // разные тире -> обычный дефис
+  line = line.replace(/[\u2010\u2011\u2012\u2013\u2014\u2015–—−]/g, '-');
+  // NBSP -> space
+  line = line.replace(/\u00A0/g, ' ');
+  // заменить мн. пробелов на один
+  line = line.replace(/\s+/g, ' ');
+  return line.trim();
+}
+
 function detectPOS(rusVars){
   const verbEndings = ['ться','ть','ить','еть','ать','овать','нуть','ять','тись','иться','оваться','ся'];
   for(const v of rusVars){
@@ -149,23 +162,68 @@ function detectPOS(rusVars){
   return 'noun';
 }
 
-function parseTextToWords(text){
-  return text.split(/\r?\n/).map(l => l.trim()).filter(l => l).map(line => {
-    const sep = line.search(/[-–—]/);
-    const rusPart = sep !== -1 ? line.slice(0, sep).trim() : '';
-    const arabPart = sep !== -1 ? line.slice(sep+1).trim() : '';
-    const rusVars = rusPart ? rusPart.split(',').map(r => r.trim()).filter(r=>r) : [''];
-    const arabFull = arabPart;
+function improvedParseText(text){
+  text = text.replace(/^\uFEFF/, '');
+  const rawLines = text.split(/\r?\n/);
+  const parsed = [];
+  const skipped = [];
+  for(let i = 0; i < rawLines.length; i++){
+    const raw = rawLines[i];
+    const line = normalizeLine(raw);
+    if(!line) continue;
+    const sepIndex = line.indexOf('-');
+    if(sepIndex === -1){
+      skipped.push({index: i+1, raw: line});
+      continue;
+    }
+    const left = line.slice(0, sepIndex).trim();
+    const right = line.slice(sepIndex + 1).trim();
+    const rusVars = left ? left.split(',').map(s => s.trim()).filter(Boolean) : [''];
+    const arabFull = right;
     const pos = detectPOS(rusVars);
-    return { arabicFull: arabFull, rusVariants: rusVars, rawLine: line, pos };
-  });
+    parsed.push({ rawLine: line, arabicFull: arabFull, rusVariants: rusVars, pos });
+  }
+  console.log('improvedParseText: parsed=', parsed.length, 'skipped=', skipped.length);
+  if(skipped.length) console.warn('Строки без дефиса (нужно исправить в words.txt):', skipped.slice(0,30));
+  return { parsed, skipped };
 }
 
-/* ========== Утилиты ========== */
-function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
-function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+/* ================== robust fetch (несколько попыток + raw.githubusercontent fallback) ================== */
+async function robustFetchWords(){
+  const attempts = ['words.txt','./words.txt'];
+  try{
+    const base = window.location.pathname.replace(/\/[^\/]*$/, '/');
+    attempts.push(base + 'words.txt');
+  }catch(e){}
+  for(const p of attempts){
+    try{
+      const r = await fetch(p);
+      console.debug('fetch try', p, r.status);
+      if(r.ok) return await r.text();
+    }catch(e){
+      console.warn('fetch error', p, e);
+    }
+  }
+  // fallback raw.githubusercontent (если github.io)
+  if(window.location.hostname.endsWith('github.io')){
+    const user = window.location.hostname.split('.')[0];
+    const parts = window.location.pathname.split('/').filter(Boolean);
+    if(parts.length){
+      const repo = parts[0];
+      const rawUrl = `https://raw.githubusercontent.com/${user}/${repo}/main/words.txt`;
+      try{
+        console.debug('Trying raw.githubusercontent:', rawUrl);
+        const rr = await fetch(rawUrl);
+        if(rr.ok) return await rr.text();
+      }catch(e){
+        console.warn('raw.githubusercontent fetch failed', e);
+      }
+    }
+  }
+  throw new Error('Не удалось загрузить words.txt автоматически');
+}
 
-/* ========== Сохранение / Восстановление состояния ========== */
+/* ================== Сохранение / восстановление состояния ================== */
 function saveState(){
   try {
     const state = {
@@ -181,12 +239,11 @@ function saveState(){
   }
 }
 
-function loadStateIfExists(){
+function loadState(){
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
     if(!raw) return null;
-    const st = JSON.parse(raw);
-    return st;
+    return JSON.parse(raw);
   } catch(e){
     console.error('loadState error', e);
     return null;
@@ -194,148 +251,134 @@ function loadStateIfExists(){
 }
 
 function restoreStateAfterLoad(){
-  const st = loadStateIfExists();
+  const st = loadState();
   if(!st) return false;
-  // map rawLines in st.allRaw to current allWords (if missing, try to parse that rawLine into object)
   const rawMap = new Map(allWords.map(w => [w.rawLine, w]));
-  // rebuild allWords to include any saved lines not present now
-  for(const rawLine of st.allRaw){
+  // include any saved raw not in allWords
+  for(const rawLine of st.allRaw || []){
     if(!rawMap.has(rawLine)){
-      // parse a single line and add
-      const parsed = parseTextToWords(rawLine)[0];
-      allWords.push(parsed);
-      rawMap.set(rawLine, parsed);
+      const parsed = improvedParseText(rawLine).parsed;
+      if(parsed && parsed.length) {
+        allWords.push(parsed[0]);
+        rawMap.set(rawLine, parsed[0]);
+      }
     }
   }
-  // rebuild sessionWords, mistakes, corrects by mapping raw strings to objects
-  sessionWords = st.sessionRaw.map(r => rawMap.get(r) || parseTextToWords(r)[0]).filter(Boolean);
-  mistakes = st.mistakesRaw.map(r => rawMap.get(r) || parseTextToWords(r)[0]).filter(Boolean);
-  corrects = st.correctsRaw.map(r => rawMap.get(r) || parseTextToWords(r)[0]).filter(Boolean);
+  sessionWords = (st.sessionRaw || []).map(r => rawMap.get(r) || parseSingleLineToObj(r)).filter(Boolean);
+  mistakes = (st.mistakesRaw || []).map(r => rawMap.get(r) || parseSingleLineToObj(r)).filter(Boolean);
+  corrects = (st.correctsRaw || []).map(r => rawMap.get(r) || parseSingleLineToObj(r)).filter(Boolean);
   currentIndex = Math.min(st.currentIndex || 0, sessionWords.length);
   return true;
 }
 
-/* ========== Автозагрузка words.txt (если есть) и восстановление состояния ========== */
-function tryAutoLoadWordsAndRestore(){
-  return fetch('words.txt').then(r => {
-    if(!r.ok) throw new Error('no file');
-    return r.text();
-  }).then(txt => {
-    allWords = parseTextToWords(txt);
+function parseSingleLineToObj(line){
+  const { parsed } = improvedParseText(line);
+  return parsed && parsed[0] ? parsed[0] : null;
+}
+
+/* ================== Загрузка и старт ================== */
+async function tryAutoLoadWordsAndRestore(){
+  try{
+    const txt = await robustFetchWords();
+    if(!txt || !txt.trim()){ console.warn('words.txt пустой'); return false; }
+    const { parsed, skipped } = improvedParseText(txt);
+    allWords = parsed;
     countSpan.textContent = `Загружено слов: ${allWords.length}`;
-    // попробуем восстановить состояние
+    // попытка восстановить состояние (если есть)
     const restored = restoreStateAfterLoad();
     if(restored){
-      // если восстановили, откроем тренажёр (как было)
       loader.classList.add('hidden');
       trainer.classList.remove('hidden');
-      // fill lists UI
       renderLists();
       renderProgress();
       showCurrent();
     } else {
-      // не было сохранённого состояния — только показываем загрузчик (пользователь нажал дуа => стартим)
-      // автоматически стартуем сессию сразу после дуа (если пользователь нажал)
+      // нет сохранения — стартуем с нуля
       startSession(false);
     }
-  }).catch(err => {
-    // words.txt нет либо fetch запрещён — оставляем возможность ручной загрузки
-    console.log('words.txt not loaded:', err);
-    // если есть saved state even without file, try to restore from stored allRaw
-    const st = loadStateIfExists();
+    if(skipped.length) alert('В words.txt есть строки, которые не распознаны (см. консоль).');
+    return true;
+  }catch(e){
+    console.warn('Автозагрузка words.txt не удалась:', e);
+    // если есть сохранённое состояние — восстановим из него (без файла)
+    const st = loadState();
     if(st){
-      // rebuild allWords from stored raw lines
-      allWords = st.allRaw.map(r => parseTextToWords(r)[0]);
-      // restore using function
+      // rebuild allWords from st.allRaw
+      allWords = (st.allRaw || []).map(r => parseSingleLineToObj(r)).filter(Boolean);
       restoreStateAfterLoad();
       loader.classList.add('hidden');
       trainer.classList.remove('hidden');
       renderLists();
       renderProgress();
       showCurrent();
-    } else {
-      // show loader so user can paste list manually
-      loader.classList.remove('hidden');
+      return true;
     }
-  });
-}
-
-/* ========== Загрузка вручную ========== */
-loadManualBtn.addEventListener('click', () => {
-  const txt = textInput.value;
-  if(!txt.trim()) return alert('Вставьте текст списка слов.');
-  allWords = parseTextToWords(txt);
-  countSpan.textContent = `Загружено слов: ${allWords.length}`;
-  saveStateIfFreshAll(); // merge with saved if empty
-  startSession(false);
-});
-
-/* helper: if no saved state, save initial allWords so persistence works */
-function saveStateIfFreshAll(){
-  const st = loadStateIfExists();
-  if(!st){
-    // create initial state
-    sessionWords = allWords.slice();
-    currentIndex = 0;
-    mistakes = [];
-    corrects = [];
-    saveState();
+    // иначе показать интерфейс загрузки
+    loader.classList.remove('hidden');
+    return false;
   }
 }
 
-/* ========== Кнопка загрузить words.txt (ручная) ========== */
-fetchFileBtn.addEventListener('click', () => {
-  fetch('words.txt').then(r => {
-    if(!r.ok) throw new Error('Ошибка загрузки');
-    return r.text();
-  }).then(txt => {
-    allWords = parseTextToWords(txt);
-    countSpan.textContent = `Загружено слов: ${allWords.length}`;
-    // если есть сохранённое состояние — попытаемся восстановить и продолжить, иначе стартуем новую сессию
-    const restored = restoreStateAfterLoad();
-    if(restored){
-      loader.classList.add('hidden');
-      trainer.classList.remove('hidden');
-      renderLists();
-      renderProgress();
-      showCurrent();
-    } else {
-      startSession(false);
-    }
-  }).catch(e => { console.error(e); alert('Не удалось загрузить words.txt'); });
+/* ========== Работа с UI и сессией ========== */
+didDuaBtn.addEventListener('click', () => {
+  intro.classList.add('hidden');
+  loader.classList.remove('hidden');
+  // автозагрузка/восстановление
+  tryAutoLoadWordsAndRestore();
 });
 
-/* ========== Добавить новые слова (не сбрасывая прогресс) ========== */
-addNewBtn.addEventListener('click', () => {
-  fetch('words.txt').then(r => {
-    if(!r.ok) throw new Error('Ошибка загрузки');
-    return r.text();
-  }).then(txt => {
-    const newLines = txt.split(/\r?\n/).map(l=>l.trim()).filter(l=>l);
-    let added = 0;
+loadManualBtn.addEventListener('click', () => {
+  const txt = textInput.value;
+  if(!txt.trim()) return alert('Вставьте текст списка слов.');
+  const { parsed, skipped } = improvedParseText(txt);
+  allWords = parsed;
+  countSpan.textContent = `Загружено слов: ${allWords.length}`;
+  if(skipped.length) alert('Некоторые строки не распознаны (см. консоль).');
+  startSession(false);
+});
+
+fetchFileBtn.addEventListener('click', async () => {
+  try {
+    const txt = await robustFetchWords();
+    const { parsed, skipped } = improvedParseText(txt);
+    allWords = parsed;
+    countSpan.textContent = `Загружено слов: ${allWords.length}`;
+    if(skipped.length) alert('Некоторые строки не распознаны (см. консоль).');
+    startSession(false);
+  } catch(e){
+    alert('Не удалось загрузить words.txt автоматически (см. консоль).');
+  }
+});
+
+/* Добавить новые слова (не сбрасывая прогресс) */
+addNewBtn.addEventListener('click', async () => {
+  try{
+    const txt = await robustFetchWords();
+    const { parsed } = improvedParseText(txt);
     const existing = new Set(allWords.map(w => w.rawLine));
-    for(const ln of newLines){
-      if(!existing.has(ln)){
-        const obj = parseTextToWords(ln)[0];
-        allWords.push(obj);
-        // если тренировка идёт, вставляем в случайную позицию после текущIndex
-        if(trainer.classList.contains('hidden') === false && sessionWords.length>0){
+    let added = 0;
+    for(const p of parsed){
+      if(!existing.has(p.rawLine)){
+        allWords.push(p);
+        // вставить в sessionWords случайно после текущIndex если тренажёр идёт
+        if(trainer.classList.contains('hidden') === false && sessionWords.length){
           const pos = currentIndex + 1 + Math.floor(Math.random() * (sessionWords.length - currentIndex + 1));
-          sessionWords.splice(pos, 0, obj);
+          sessionWords.splice(pos, 0, p);
         } else {
-          // если тренажёр не запущен, добавляем к sessionWords baseline
-          sessionWords.push(obj);
+          sessionWords.push(p);
         }
         added++;
       }
     }
     countSpan.textContent = `Загружено слов: ${allWords.length}`;
-    saveState(); // обновляем сохранение
-    alert(`Добавлено новых слов: ${added}`);
-  }).catch(e => { console.error(e); alert('Не удалось загрузить words.txt'); });
+    saveState();
+    alert('Добавлено новых слов: ' + added);
+  }catch(e){
+    alert('Не удалось загрузить words.txt для добавления (см. консоль).');
+  }
 });
 
-/* ========== Сессия: старт/логика ========= */
+/* start / session management */
 function startSession(useMistakes=false){
   if(allWords.length === 0){
     alert('Список слов пуст. Сначала загрузите words.txt или вставьте список вручную.');
@@ -367,26 +410,22 @@ workMistakesBtn.addEventListener('click', ()=> {
   startSession(true);
 });
 
-/* ========== Выбор дистракторов: строгая POS-логика ========= */
+/* Выбор дистракторов: только той же POS (если доступно), иначе любые */
 function findDistractorsFor(correctObj, count){
-  // ищем индексы в allWords с той же pos (исключая сам correctObj)
   const same = allWords.filter(w => w.pos === correctObj.pos && w.rawLine !== correctObj.rawLine);
-  // если достаточно, возьмём случайные count из same
   if(same.length >= count){
     shuffle(same);
     return same.slice(0,count);
   }
-  // иначе: сначала все same, затем случайные из остальных (без дубликатов)
   const picks = same.slice();
   const others = allWords.filter(w => w.rawLine !== correctObj.rawLine && !picks.includes(w));
   shuffle(others);
   while(picks.length < count && others.length) picks.push(others.shift());
-  // если всё ещё мало (очень маленький словарь) — дублируем correct (не идеально, но безопасно)
   while(picks.length < count) picks.push(correctObj);
   return picks.slice(0,count);
 }
 
-/* ========== Показ текущего слова и вариантов ========= */
+/* показать текущий */
 function showCurrent(){
   clearChoiceStyles();
   if(currentIndex >= sessionWords.length){
@@ -399,9 +438,7 @@ function showCurrent(){
   const item = sessionWords[currentIndex];
   arabicWordDiv.textContent = item.arabicFull || '[нет арабского]';
   renderProgress();
-
   const correctText = item.rusVariants.join(', ');
-  // distractors: объекты
   const distractors = findDistractorsFor(item, 2);
   const options = [correctText, distractors[0].rusVariants.join(', '), distractors[1].rusVariants.join(', ')];
   shuffle(options);
@@ -414,7 +451,7 @@ function showCurrent(){
   saveState();
 }
 
-/* ========== Клики по вариантам ========= */
+/* клики по вариантам */
 optButtons.forEach(btn => {
   btn.addEventListener('click', (e) => {
     const chosen = e.currentTarget;
@@ -440,7 +477,7 @@ optButtons.forEach(btn => {
   });
 });
 
-/* ========== Модалка при ошибке ========= */
+/* модалка при ошибке */
 function showWrongModal(arabicText, ruText, onClose){
   closeModal();
   const overlay = document.createElement('div'); overlay.className = 'overlay';
@@ -463,33 +500,29 @@ function showWrongModal(arabicText, ruText, onClose){
 
 function closeModal(){ modalRoot.innerHTML = ''; if(modalTimer){ clearTimeout(modalTimer); modalTimer = null; } }
 
-/* ========== Копировать ошибки (raw lines) ========= */
+/* копирование ошибок (rawLine) */
 copyMistakesBtn.addEventListener('click', () => {
   if(mistakes.length === 0) return alert('Ошибок пока нет.');
   const text = mistakes.map(m => m.rawLine).join('\n');
   navigator.clipboard.writeText(text).then(()=> alert('Ошибки скопированы в буфер обмена')).catch(e => { console.error(e); alert('Не удалось скопировать (браузер не разрешил).'); });
 });
 
-/* ========== Сброс прогресса (полный) ========= */
+/* сброс прогресса (полный) */
 resetProgressBtn.addEventListener('click', () => {
   if(!confirm('Сбросить прогресс? Это очистит ошибки и текущую сессию.')) return;
-  // clear saved state
   try{ localStorage.removeItem(STORAGE_KEY); } catch(e){ console.error(e); }
-  // reset memory
   sessionWords = [];
   mistakes = [];
   corrects = [];
   currentIndex = 0;
   correctListDiv.innerHTML = '';
   mistakeListDiv.innerHTML = '';
-  // show loader so user can decide
   trainer.classList.add('hidden');
   loader.classList.remove('hidden');
-  // keep allWords as-is (so user can restart without reuploading)
   countSpan.textContent = `Загружено слов: ${allWords.length}`;
 });
 
-/* ========== Вспомогательные UI ========== */
+/* вспомогательные UI */
 function renderProgress(){
   progressDiv.textContent = `${Math.min(currentIndex, sessionWords.length)}/${sessionWords.length} слов пройдено – ${mistakes.length} ошибок`;
 }
@@ -498,87 +531,42 @@ function renderLists(){
   mistakeListDiv.innerHTML = mistakes.length ? mistakes.map(c => `<div>${escapeHtml(c.arabicFull)} → ${escapeHtml(c.rusVariants.join(', '))}</div>`).join('') : '—';
 }
 
-/* ========== Восстановление / автозапуск ========== */
-didDuaBtn.addEventListener('click', () => {
-  // скрываем intro и показываем loader (и пытаемся автоматически загрузить words.txt)
-  intro.classList.add('hidden');
-  loader.classList.remove('hidden');
-  // try to auto load words and restore state
-  tryAutoLoadWordsAndRestore();
-});
+/* helpers */
+function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-/* helper to try auto load and if no saved state start fresh session */
-function tryAutoLoadWordsAndRestore(){
-  tryAutoLoadWordsAndRestoreImpl();
-}
-function tryAutoLoadWordsAndRestoreImpl(){
-  fetch('words.txt').then(r => {
-    if(!r.ok) throw new Error('no file');
-    return r.text();
-  }).then(txt => {
-    allWords = parseTextToWords(txt);
-    countSpan.textContent = `Загружено слов: ${allWords.length}`;
-    const restored = restoreStateAfterLoad();
-    if(restored){
-      // restored -> show trainer and continue
-      loader.classList.add('hidden');
-      trainer.classList.remove('hidden');
-      renderLists();
-      renderProgress();
-      showCurrent();
-    } else {
-      // no saved state -> start session immediately
-      startSession(false);
-    }
-  }).catch(err => {
-    // if cannot fetch file, but saved state exists, restore from localStorage
-    const st = loadStateIfExists();
-    if(st){
-      // rebuild allWords from saved list
-      allWords = st.allRaw.map(r => parseTextToWords(r)[0]);
-      restoreStateAfterLoad();
-      loader.classList.add('hidden');
-      trainer.classList.remove('hidden');
-      renderLists();
-      renderProgress();
-      showCurrent();
-    } else {
-      // else show loader so user can paste the list
-      loader.classList.remove('hidden');
-    }
-  });
-}
-
-/* ========== Найденный ранее helper restore function (повторяем) ========== */
-function restoreStateAfterLoad(){
-  const st = loadStateIfExists();
+/* восстановление состояния из localStorage (если при загрузке не было файла) */
+function restoreStateAfterLoad(){ /* функция определена ранее - переиспользуется */ return restoreStateAfterLoadImpl(); }
+function restoreStateAfterLoadImpl(){
+  const st = loadState();
   if(!st) return false;
   const rawMap = new Map(allWords.map(w => [w.rawLine, w]));
-  // include any saved raw which are not in allWords
-  for(const rawLine of st.allRaw){
+  for(const rawLine of st.allRaw || []){
     if(!rawMap.has(rawLine)){
-      const parsed = parseTextToWords(rawLine)[0];
-      allWords.push(parsed);
-      rawMap.set(rawLine, parsed);
+      const parsed = improvedParseText(rawLine).parsed;
+      if(parsed && parsed.length){
+        allWords.push(parsed[0]);
+        rawMap.set(rawLine, parsed[0]);
+      }
     }
   }
-  sessionWords = st.sessionRaw.map(r => rawMap.get(r) || parseTextToWords(r)[0]).filter(Boolean);
-  mistakes = st.mistakesRaw.map(r => rawMap.get(r) || parseTextToWords(r)[0]).filter(Boolean);
-  corrects = st.correctsRaw.map(r => rawMap.get(r) || parseTextToWords(r)[0]).filter(Boolean);
+  sessionWords = (st.sessionRaw || []).map(r => rawMap.get(r) || parseSingleLineToObj(r)).filter(Boolean);
+  mistakes = (st.mistakesRaw || []).map(r => rawMap.get(r) || parseSingleLineToObj(r)).filter(Boolean);
+  corrects = (st.correctsRaw || []).map(r => rawMap.get(r) || parseSingleLineToObj(r)).filter(Boolean);
   currentIndex = Math.min(st.currentIndex || 0, sessionWords.length);
   return true;
 }
 
-/* ========== Сохранение состояния периодически (и при unload) ========== */
+/* сохранить при уходе */
 window.addEventListener('beforeunload', saveState);
 window.addEventListener('visibilitychange', () => { if(document.visibilityState === 'hidden') saveState(); });
 
-/* ========== Начальное поведение: если есть saved state, покажем loader (intro handled by user) ========= */
-(function initOnLoad(){
-  // nothing: we wait for user to press "Я сделал дуа", which triggers auto load and restore
-  // But if user directly refreshes inside trainer, restoreState is handled above when didDua was clicked previously
+/* ========== Инициализация ========== */
+/* Если пользователь обновил страницу внутри тренажёра, мы ждём, что он нажмёт дуа раньше,
+   но если он открывает страницу впервые — ждем клика "Я сделал дуа" */
+(function(){
+  // ничего: пользователь запускает flow через кнопку дуа
 })();
-
 </script>
 </body>
 </html>
