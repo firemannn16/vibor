@@ -108,17 +108,17 @@ const STORAGE_KEY = (() => {
 })();
 const AUTO_MODAL_CLOSE_MS = 17000;
 
-/* ========== Утилиты (должны быть объявлены раньше использования) ========== */
+/* ========== Утилиты ========== */
 function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 /* ========== Состояния ========== */
-let allWords = [];      // { rawLine, arabicFull, rusVariants, pos }
-let sessionWords = [];
-let mistakes = [];
-let corrects = [];
-let currentIndex = 0;
-let modalTimer = null;
+let allWords = [];      // { rawLine, arabicFull, rusVariants[], pos }
+let orderRaw = [];      // remaining rawLine'ы (не показаны ещё)
+let currentRaw = null;  // текущая rawLine (показанная)
+let mistakes = [];      // rawLine[]
+let corrects = [];      // rawLine[]
+let mode = 'all';       // 'all' или 'mistakes'
 
 /* ========== DOM ========== */
 const didDuaBtn = document.getElementById('did-dua');
@@ -185,8 +185,6 @@ function improvedParseText(text){
     const arabicFull = right;
     parsed.push({ rawLine: line, arabicFull, rusVariants: rusVars, pos: detectPOS(rusVars) });
   }
-  console.debug('improvedParseText: parsed=', parsed.length, 'skipped=', skipped.length);
-  if(skipped.length) console.warn('Строки без дефиса:', skipped.slice(0,30));
   return { parsed, skipped };
 }
 
@@ -197,11 +195,9 @@ async function robustFetchWords(){
   for(const p of tries){
     try{
       const r = await fetch(p);
-      console.debug('fetch try', p, r.status);
       if(r.ok) return await r.text();
-    }catch(e){ /* ignore */ }
+    }catch(e){}
   }
-  // fallback to raw main (если репо в main)
   try{
     const user = location.hostname.split('.')[0] || '';
     const repo = (location.pathname.split('/').filter(Boolean)[0] || '');
@@ -214,10 +210,17 @@ async function robustFetchWords(){
   throw new Error('Не удалось загрузить words.txt автоматически');
 }
 
-/* ========== Сохранение / восстановление состояния ========== */
+/* ========== Save / Load state (rawLine-based) ========== */
 function saveState(){
   try{
-    const st = { allRaw: allWords.map(w=>w.rawLine), sessionRaw: sessionWords.map(w=>w.rawLine), currentIndex, mistakesRaw: mistakes.map(w=>w.rawLine), correctsRaw: corrects.map(w=>w.rawLine) };
+    const st = {
+      allRaw: allWords.map(w=>w.rawLine),
+      orderRaw: orderRaw.slice(),
+      currentRaw,
+      mistakesRaw: mistakes.slice(),
+      correctsRaw: corrects.slice(),
+      mode
+    };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(st));
   }catch(e){ console.error('saveState', e); }
 }
@@ -229,149 +232,94 @@ function parseSingleLineToObj(line){
   return parsed && parsed[0] ? parsed[0] : null;
 }
 
+/* ========== Init / Restore logic (rawLine-based sync) ========== */
 function restoreStateAfterLoad(){
   const st = loadState();
   if(!st) return false;
+  // ensure allWords contains all lines from saved snapshot
   const map = new Map(allWords.map(w=>[w.rawLine,w]));
   for(const r of st.allRaw || []) if(!map.has(r)){
     const obj = parseSingleLineToObj(r);
     if(obj){ allWords.push(obj); map.set(r,obj); }
   }
-  sessionWords = (st.sessionRaw || []).map(r => map.get(r) || parseSingleLineToObj(r)).filter(Boolean);
-  mistakes = (st.mistakesRaw || []).map(r => map.get(r) || parseSingleLineToObj(r)).filter(Boolean);
-  corrects = (st.correctsRaw || []).map(r => map.get(r) || parseSingleLineToObj(r)).filter(Boolean);
-  currentIndex = Math.min(st.currentIndex || 0, sessionWords.length);
+  // restore orderRaw (remaining), but filter by current server allWords
+  const serverRawSet = new Set(allWords.map(w=>w.rawLine));
+  orderRaw = (Array.isArray(st.orderRaw) ? st.orderRaw.slice() : []).filter(r => serverRawSet.has(r));
+  // if server has new lines not in snapshot, append them to orderRaw (so new words will be asked)
+  const oldSnap = Array.isArray(st.allRaw) ? new Set(st.allRaw) : new Set([]);
+  const toAdd = allWords.map(w=>w.rawLine).filter(r => !oldSnap.has(r));
+  for(const r of toAdd){
+    if(!orderRaw.includes(r) && r !== st.currentRaw && !st.correctsRaw?.includes(r) && !st.mistakesRaw?.includes(r)) orderRaw.push(r);
+  }
+  // restore mistakes/corrects filtered by server
+  mistakes = (Array.isArray(st.mistakesRaw) ? st.mistakesRaw.filter(r => serverRawSet.has(r)) : []);
+  corrects = (Array.isArray(st.correctsRaw) ? st.correctsRaw.filter(r => serverRawSet.has(r)) : []);
+  currentRaw = (st.currentRaw && serverRawSet.has(st.currentRaw)) ? st.currentRaw : null;
+  mode = st.mode || 'all';
   return true;
 }
 
-/* ========== UI helpers ========== */
-function clearChoiceStyles(){
-  optButtons.forEach(b => { b.classList.remove('correct','wrong'); b.disabled = false; });
+/* ========== Helpers for UI ========== */
+function updateProgress(){
+  const total = allWords.length;
+  const done = total - orderRaw.length;
+  progressDiv.textContent = `${done}/${total} слов пройдено – ${mistakes.length} ошибок`;
 }
 
-/* ========== Сессии / логика ========== */
-didDuaBtn.addEventListener('click', () => {
-  document.getElementById('intro').classList && document.getElementById('intro').classList.add('hidden');
-  loader.classList.remove('hidden');
-  tryAutoLoadWordsAndRestore();
-});
+function renderLists(){
+  correctListDiv.innerHTML = corrects.length ? corrects.map(c=>`<div>${escapeHtml(c)}</div>`).join('') : '—';
+  mistakeListDiv.innerHTML = mistakes.length ? mistakes.map(c=>`<div>${escapeHtml(c)}</div>`).join('') : '—';
+}
 
-loadManualBtn.addEventListener('click', () => {
-  const t = textInput.value;
-  if(!t.trim()) return alert('Вставьте список слов.');
-  const { parsed, skipped } = improvedParseText(t);
-  allWords = parsed;
-  countSpan.textContent = `Загружено слов: ${allWords.length}`;
-  if(skipped.length) alert('Некоторые строки не распознаны — см. консоль.');
-  startSession(false);
-});
-
-fetchFileBtn.addEventListener('click', async () => {
-  try{
-    const txt = await robustFetchWords();
-    const { parsed, skipped } = improvedParseText(txt);
-    allWords = parsed;
-    countSpan.textContent = `Загружено слов: ${allWords.length}`;
-    if(skipped.length) alert('Некоторые строки не распознаны — см. консоль.');
-    startSession(false);
-  }catch(e){
-    console.error(e);
-    alert('Не удалось загрузить words.txt (см. консоль).');
+/* ========== Order management & showing words (non-repeat) ========== */
+function prepareOrder(source='all'){
+  if(source === 'all'){
+    orderRaw = allWords.map(w=>w.rawLine);
+    shuffle(orderRaw);
+    mode = 'all';
+  } else {
+    // mistakes mode
+    orderRaw = mistakes.slice();
+    shuffle(orderRaw);
+    mode = 'mistakes';
   }
-});
-
-addNewBtn.addEventListener('click', async () => {
-  try{
-    const txt = await robustFetchWords();
-    const { parsed } = improvedParseText(txt);
-    const existing = new Set(allWords.map(w=>w.rawLine));
-    let added = 0;
-    for(const p of parsed) if(!existing.has(p.rawLine)){
-      allWords.push(p);
-      if(trainer.classList.contains('hidden')===false && sessionWords.length){
-        const pos = currentIndex + 1 + Math.floor(Math.random()*(sessionWords.length-currentIndex+1));
-        sessionWords.splice(pos,0,p);
-      } else sessionWords.push(p);
-      added++;
-    }
-    countSpan.textContent = `Загружено слов: ${allWords.length}`;
-    saveState();
-    alert('Добавлено новых слов: ' + added);
-  }catch(e){ alert('Ошибка при добавлении (см. консоль)'); }
-});
-
-resetProgressBtn.addEventListener('click', () => {
-  if(!confirm('Сбросить прогресс?')) return;
-  try{ localStorage.removeItem(STORAGE_KEY); }catch(e){}
-  sessionWords=[]; mistakes=[]; corrects=[]; currentIndex=0;
-  correctListDiv.innerHTML=''; mistakeListDiv.innerHTML='';
-  trainer.classList.add('hidden'); loader.classList.remove('hidden');
-});
-
-copyMistakesBtn.addEventListener('click', () => {
-  if(!mistakes.length) return alert('Ошибок нет.');
-  const txt = mistakes.map(m=>m.rawLine).join('\n');
-  navigator.clipboard.writeText(txt).then(()=>alert('Ошибки скопированы в буфер.'));
-});
-
-retryAllBtn.addEventListener('click', ()=> startSession(false));
-workMistakesBtn.addEventListener('click', ()=> { if(!mistakes.length) return alert('Ошибок нет'); startSession(true); });
-
-function startSession(useMistakes=false){
-  if(!allWords.length){ alert('Список пуст. Загрузите words.txt или вставьте список вручную.'); loader.classList.remove('hidden'); trainer.classList.add('hidden'); return; }
-  if(!useMistakes){ mistakes=[]; corrects=[]; sessionWords = allWords.slice(); } else sessionWords = mistakes.slice();
-  shuffle(sessionWords);
-  currentIndex = 0;
-  correctListDiv.innerHTML=''; mistakeListDiv.innerHTML='';
-  loader.classList.add('hidden'); trainer.classList.remove('hidden'); afterDiv.classList.add('hidden');
-  showCurrent();
   saveState();
 }
 
-function findDistractorsFor(correctObj, count){
-  const same = allWords.filter(w => w.pos === correctObj.pos && w.rawLine !== correctObj.rawLine);
-  if(same.length >= count){ shuffle(same); return same.slice(0,count); }
-  const picks = same.slice();
-  const others = allWords.filter(w => w.rawLine !== correctObj.rawLine && !picks.includes(w));
-  shuffle(others);
-  while(picks.length < count && others.length) picks.push(others.shift());
-  while(picks.length < count) picks.push(correctObj);
-  return picks.slice(0,count);
-}
-
-/* showCurrent с защитами */
-function showCurrent(){
-  clearChoiceStyles();
-  if(currentIndex >= sessionWords.length){
-    progressDiv.textContent = `Готово! Пройдено ${sessionWords.length}/${sessionWords.length}, ошибок: ${mistakes.length}`;
-    afterDiv.classList.remove('hidden'); workMistakesBtn.classList.toggle('hidden', mistakes.length===0); saveState(); return;
+function nextWord(){
+  // if no remaining -> prepare
+  if(!orderRaw || orderRaw.length === 0){
+    if(mode === 'mistakes' && mistakes.length === 0){
+      arabicWordDiv.textContent = 'Ошибок нет.';
+      updateProgress();
+      return;
+    }
+    prepareOrder(mode === 'mistakes' ? 'mistakes' : 'all');
   }
-  const item = sessionWords[currentIndex];
-  if(!item){
-    console.warn('showCurrent: нет item для currentIndex=', currentIndex);
-    arabicWordDiv.textContent = '[ошибка — пустой элемент]';
+  if(orderRaw.length === 0){
+    arabicWordDiv.textContent = 'Нет слов для тренировки.';
+    updateProgress();
     return;
   }
+  // take next (shift -> removed from remaining immediately)
+  const raw = orderRaw.shift();
+  currentRaw = raw;
+  saveState(); // persist immediately so it won't repeat on reload
 
-  let displayArabic = (item.arabicFull || '').trim();
+  const obj = allWords.find(w => w.rawLine === raw) || parseSingleLineToObj(raw) || { rawLine: raw, arabicFull: raw, rusVariants: [''] };
+  // display arabic
+  let displayArabic = (obj.arabicFull || '').trim();
   if(!displayArabic){
-    const r = item.rawLine || '';
-    const sep = r.indexOf('-');
-    if(sep !== -1) displayArabic = r.slice(sep+1).trim();
+    const sep = raw.indexOf('-');
+    if(sep !== -1) displayArabic = raw.slice(sep+1).trim();
   }
   displayArabic = displayArabic.replace(/\s*-\s*/g,' - ').trim();
-
-  if(!displayArabic){
-    arabicWordDiv.textContent = '[нет арабского]';
-    console.warn('Пустая арабская часть у объекта:', item);
-  } else {
-    arabicWordDiv.textContent = displayArabic;
-  }
+  arabicWordDiv.textContent = displayArabic || '[нет арабского]';
   arabicWordDiv.setAttribute('dir','rtl');
-  console.debug('Current item:', {index: currentIndex, raw: item.rawLine, arabic: displayArabic, rus: item.rusVariants});
 
-  const correctText = (item.rusVariants||[]).join(', ') || '(нет перевода)';
-  const distractors = findDistractorsFor(item, 2);
+  // prepare options: show full rusVariants as comma-separated for the correct option
+  const correctText = (obj.rusVariants||[]).join(', ') || '(нет перевода)';
+  const distractors = findDistractorsFor(obj, 2);
   const options = [correctText, (distractors[0]?.rusVariants||[]).join(', ') || '—', (distractors[1]?.rusVariants||[]).join(', ') || '—'];
   shuffle(options);
   optButtons.forEach((btn,idx) => {
@@ -380,39 +328,64 @@ function showCurrent(){
     btn.classList.remove('correct','wrong');
     btn.dataset.correct = (options[idx] === correctText) ? '1' : '0';
   });
-
-  progressDiv.textContent = `${currentIndex+1}/${sessionWords.length} слов пройдено – ${mistakes.length} ошибок`;
-  saveState();
+  updateProgress();
+  renderLists();
 }
 
-/* обработчики кнопок вариантов (с защитой на undefined) */
+/* find distractors by pos then fallback */
+function findDistractorsFor(correctObj, count){
+  const same = allWords.filter(w => w.pos === correctObj.pos && w.rawLine !== correctObj.rawLine);
+  shuffle(same);
+  const picks = same.slice(0,count);
+  if(picks.length < count){
+    const others = allWords.filter(w => w.rawLine !== correctObj.rawLine && !picks.includes(w));
+    shuffle(others);
+    for(const o of others){
+      if(picks.length>=count) break;
+      picks.push(o);
+    }
+  }
+  while(picks.length < count) picks.push(correctObj);
+  return picks.slice(0,count);
+}
+
+/* ========== Option button handlers ========== */
 optButtons.forEach(btn => {
   btn.addEventListener('click', (e) => {
     const chosen = e.currentTarget;
     const isCorrect = chosen.dataset.correct === '1';
     optButtons.forEach(b=>b.disabled=true);
-    const cur = sessionWords[currentIndex];
-    if(!cur){
-      console.warn('Ответ выбран, но текущий элемент undefined');
-      return;
-    }
+    const curRaw = currentRaw;
+    const obj = allWords.find(w => w.rawLine === curRaw) || parseSingleLineToObj(curRaw) || { rawLine: curRaw, arabicFull: curRaw, rusVariants: [''] };
     if(isCorrect){
       chosen.classList.add('correct');
-      correctListDiv.innerHTML = (correctListDiv.innerHTML.trim()==='—' ? '' : correctListDiv.innerHTML) + `<div>${escapeHtml(cur.arabicFull || cur.rawLine)} → ${escapeHtml(cur.rusVariants.join(', '))}</div>`;
-      corrects.push(cur);
-      currentIndex++;
-      setTimeout(()=> showCurrent(), 600);
+      // store full rawLine into corrects for display (user asked full raw)
+      corrects.push(obj.rawLine);
+      renderLists();
+      saveState();
+      // short delay so user sees highlight
+      setTimeout(()=> {
+        currentRaw = null;
+        if(orderRaw.length === 0) finishSession(); else nextWord();
+      }, 450);
     } else {
       chosen.classList.add('wrong');
-      mistakes.push(cur);
-      mistakeListDiv.innerHTML = (mistakeListDiv.innerHTML.trim()==='—' ? '' : mistakeListDiv.innerHTML) + `<div>${escapeHtml(cur.arabicFull || cur.rawLine)} → ${escapeHtml(cur.rusVariants.join(', '))}</div>`;
-      showWrongModal(cur.arabicFull || cur.rawLine, cur.rusVariants.join(', '), ()=> { currentIndex++; showCurrent(); });
+      // add to mistakes as rawLine but avoid duplicates
+      if(!mistakes.includes(obj.rawLine)) mistakes.push(obj.rawLine);
+      renderLists();
+      saveState();
+      // show modal with correct raw and rus variants; after close -> next
+      const correctText = obj.rawLine;
+      showWrongModal(obj.arabicFull || obj.rawLine, (obj.rusVariants||[]).join(', '), ()=> {
+        currentRaw = null;
+        if(orderRaw.length === 0) finishSession(); else nextWord();
+      });
     }
-    saveState();
   });
 });
 
-/* модалка */
+/* ========== Modal (17s auto-close) ========== */
+let modalTimer = null;
 function showWrongModal(arabicText, ruText, onClose){
   closeModal();
   const overlay = document.createElement('div'); overlay.className='overlay';
@@ -428,37 +401,197 @@ function showWrongModal(arabicText, ruText, onClose){
 }
 function closeModal(){ modalRoot.innerHTML=''; if(modalTimer){ clearTimeout(modalTimer); modalTimer=null; } }
 
-/* вспомогательные UI */
-function renderLists(){
-  correctListDiv.innerHTML = corrects.length ? corrects.map(c=>`<div>${escapeHtml(c.arabicFull||c.rawLine)} → ${escapeHtml(c.rusVariants.join(', '))}</div>`).join('') : '—';
-  mistakeListDiv.innerHTML = mistakes.length ? mistakes.map(c=>`<div>${escapeHtml(c.arabicFull||c.rawLine)} → ${escapeHtml(c.rusVariants.join(', '))}</div>`).join('') : '—';
+/* ========== Finish session ========== */
+function finishSession(){
+  const total = allWords.length || 0;
+  const done = total - (orderRaw.length || 0);
+  arabicWordDiv.textContent = `Готово! Пройдено ${done}/${total}, ошибок: ${mistakes.length}`;
+  afterDiv.classList.remove('hidden');
+  workMistakesBtn.classList.toggle('hidden', mistakes.length === 0);
+  saveState();
+  renderLists();
 }
 
-/* автозагрузка и восстановление */
-async function tryAutoLoadWordsAndRestore(){
+/* ========== Add new words (only truly new) ========== */
+async function addNewWords(){
   try{
     const txt = await robustFetchWords();
-    const { parsed, skipped } = improvedParseText(txt);
-    allWords = parsed;
-    countSpan.textContent = `Загружено слов: ${allWords.length}`;
-    if(restoreStateAfterLoad()){
-      loader.classList.add('hidden'); trainer.classList.remove('hidden'); renderLists(); showCurrent();
-    } else {
-      startSession(false);
+    const { parsed } = improvedParseText(txt);
+    const existingSet = new Set(allWords.map(w=>w.rawLine));
+    let added = 0;
+    for(const p of parsed){
+      if(!existingSet.has(p.rawLine) && !corrects.includes(p.rawLine) && !mistakes.includes(p.rawLine)){
+        allWords.push(p);
+        // append to orderRaw only if not present
+        if(!orderRaw.includes(p.rawLine) && p.rawLine !== currentRaw) orderRaw.push(p.rawLine);
+        added++;
+        existingSet.add(p.rawLine);
+      }
     }
-    if(skipped.length) console.warn('Skipped lines (no dash):', skipped.slice(0,20));
+    countSpan.textContent = `Загружено слов: ${allWords.length}`;
+    saveState();
+    alert('Добавлено новых слов: ' + added);
   }catch(e){
-    console.warn('Автозагрузка words.txt не удалась:', e);
-    loader.classList.remove('hidden');
+    console.error(e);
+    alert('Ошибка при добавлении слов (см. консоль).');
   }
 }
 
-/* сохраняем при уходе */
+/* ========== Reset progress (clears lists and shows dua) ========== */
+function resetProgress(){
+  if(!confirm('Сбросить прогресс?')) return;
+  try{ localStorage.removeItem(STORAGE_KEY); }catch(e){}
+  // re-init in-memory structures
+  orderRaw = allWords.map(w=>w.rawLine);
+  shuffle(orderRaw);
+  currentRaw = null;
+  mistakes = [];
+  corrects = [];
+  mode = 'all';
+  correctListDiv.innerHTML = '—';
+  mistakeListDiv.innerHTML = '—';
+  trainer.classList.add('hidden');
+  loader.classList.remove('hidden');
+  // show dua again
+}
+
+/* ========== Copy mistakes ==========
+   copy rawLine list (as requested by user) */
+function copyMistakes(){
+  if(!mistakes.length) return alert('Ошибок нет.');
+  const text = mistakes.join('\n');
+  navigator.clipboard.writeText(text).then(()=> alert('Ошибки скопированы')).catch(()=> alert('Не удалось скопировать'));
+}
+
+/* ========== UI handlers (load, buttons) ========== */
+didDuaBtn.addEventListener('click', () => {
+  document.getElementById('intro').classList.add('hidden');
+  // show loader or trainer depending on whether words have been loaded / restored
+  if(allWords.length === 0){
+    loader.classList.remove('hidden'); trainer.classList.add('hidden');
+  } else {
+    loader.classList.add('hidden'); trainer.classList.remove('hidden');
+    // if we had currentRaw restored, show it, else start next
+    if(currentRaw){
+      const obj = allWords.find(w=>w.rawLine === currentRaw) || parseSingleLineToObj(currentRaw);
+      arabicWordDiv.textContent = (obj && obj.arabicFull) ? obj.arabicFull : (currentRaw || '');
+      updateProgress();
+    } else {
+      nextWord();
+    }
+  }
+});
+
+loadManualBtn.addEventListener('click', () => {
+  const t = textInput.value;
+  if(!t || !t.trim()) return alert('Вставьте список слов.');
+  const { parsed, skipped } = improvedParseText(t);
+  allWords = parsed.slice();
+  countSpan.textContent = `Загружено слов: ${allWords.length}`;
+  // initialize queue and show trainer
+  orderRaw = allWords.map(w=>w.rawLine);
+  shuffle(orderRaw);
+  mistakes=[]; corrects=[]; currentRaw=null; mode='all';
+  loader.classList.add('hidden'); trainer.classList.remove('hidden');
+  renderLists(); saveState(); nextWord();
+  if(skipped.length) console.warn('Skipped lines (no dash):', skipped.slice(0,30));
+});
+
+fetchFileBtn.addEventListener('click', async () => {
+  try{
+    const txt = await robustFetchWords();
+    const { parsed, skipped } = improvedParseText(txt);
+    allWords = parsed.slice();
+    countSpan.textContent = `Загружено слов: ${allWords.length}`;
+    // try restore if saved state exists; but still show dua until user clicks
+    if(restoreStateAfterLoad()){
+      loader.classList.add('hidden');
+      // show intro to let user click "Я сделал дуа"
+      trainer.classList.add('hidden');
+      renderLists();
+    } else {
+      // initialize fresh
+      orderRaw = allWords.map(w=>w.rawLine);
+      shuffle(orderRaw);
+      mistakes=[]; corrects=[]; currentRaw=null; mode='all';
+      loader.classList.add('hidden');
+      // show intro
+      trainer.classList.add('hidden');
+    }
+    if(skipped.length) console.warn('Skipped lines (no dash):', skipped.slice(0,30));
+    saveState();
+  }catch(e){
+    console.error(e);
+    alert('Не удалось загрузить words.txt (см. консоль).');
+  }
+});
+
+addNewBtn.addEventListener('click', addNewWords);
+resetProgressBtn.addEventListener('click', resetProgress);
+copyMistakesBtn.addEventListener('click', copyMistakes);
+
+retryAllBtn.addEventListener('click', ()=> {
+  // restart full run (without clearing storage) — rebuild order from allWords
+  prepareOrder('all');
+  currentRaw = null;
+  mistakes = []; corrects = [];
+  saveState();
+  trainer.classList.remove('hidden'); loader.classList.add('hidden');
+  nextWord();
+});
+
+workMistakesBtn.addEventListener('click', ()=> {
+  if(!mistakes.length) return alert('Ошибок нет.');
+  prepareOrder('mistakes');
+  saveState();
+  trainer.classList.remove('hidden'); loader.classList.add('hidden');
+  // show trainer
+  loader.classList.add('hidden'); trainer.classList.remove('hidden');
+  nextWord();
+});
+
+/* ========== Restore on load (but show dua first) ========== */
+(async function init(){
+  try{
+    // try to load words from server to know dictionary early (no automatic start)
+    const txt = await robustFetchWords().catch(()=>null);
+    if(txt){
+      const { parsed } = improvedParseText(txt);
+      allWords = parsed.slice();
+      countSpan.textContent = `Загружено слов: ${allWords.length}`;
+      // try restore state
+      if(restoreStateAfterLoad()){
+        // show dua screen (user must click to continue)
+        document.getElementById('intro').classList.remove('hidden');
+        loader.classList.add('hidden');
+        trainer.classList.add('hidden');
+        renderLists();
+        updateProgress();
+        return;
+      } else {
+        // no saved state -> show dua and loader to let user start
+        orderRaw = allWords.map(w=>w.rawLine); shuffle(orderRaw);
+        document.getElementById('intro').classList.remove('hidden');
+        loader.classList.add('hidden'); trainer.classList.add('hidden');
+        updateProgress();
+        saveState();
+        return;
+      }
+    } else {
+      // no words fetched -> show loader so user can paste or fetch
+      document.getElementById('intro').classList.remove('hidden');
+      loader.classList.remove('hidden'); trainer.classList.add('hidden');
+    }
+  }catch(e){
+    console.warn('init load failed', e);
+    document.getElementById('intro').classList.remove('hidden');
+    loader.classList.remove('hidden'); trainer.classList.add('hidden');
+  }
+})();
+
+/* Save periodically and on leave */
 window.addEventListener('beforeunload', saveState);
 window.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') saveState(); });
-
-/* инициализация: ждём, пока пользователь нажмёт "Я сделал дуа" */
-(function init(){ /* ничего не делаем до клика */ })();
 
 </script>
 </body>
