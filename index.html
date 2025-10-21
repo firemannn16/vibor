@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Арабский тренажёр — исправлено</title>
+<title>Арабский тренажёр — обновлённый</title>
 <style>
   body{font-family:Arial,Helvetica,sans-serif;margin:18px;color:#111;background:#fff}
   #container{max-width:980px;margin:0 auto}
@@ -55,11 +55,8 @@
     </div>
 
     <div id="loader" class="hidden" style="margin-top:12px">
-      <p class="small">Вставьте/подгрузите список слов (формат: перевод(ы) - арабская_форма1 - арабская_форма2)</p>
-      <textarea id="text-input" placeholder="пример: жаловаться - اِشْتَكَى - يَشْتَكِي"></textarea>
+      <p class="small">Словарь загружается автоматически после нажатия «Я сделал дуа».</p>
       <div style="margin-top:8px">
-        <!-- кнопка "Загрузить вручную" удалена по запросу -->
-        <button id="fetch-file" class="button">Загрузить из words.txt</button>
         <span id="count" class="small"></span>
       </div>
     </div>
@@ -123,8 +120,6 @@ let mode = 'all';       // 'all' или 'mistakes'
 /* ========== DOM ========== */
 const didDuaBtn = document.getElementById('did-dua');
 const loader = document.getElementById('loader');
-const textInput = document.getElementById('text-input');
-const fetchFileBtn = document.getElementById('fetch-file');
 const countSpan = document.getElementById('count');
 
 const trainer = document.getElementById('trainer');
@@ -231,26 +226,22 @@ function parseSingleLineToObj(line){
   return parsed && parsed[0] ? parsed[0] : null;
 }
 
-/* ========== Init / Restore logic (rawLine-based sync) ========== */
+/* ========== Restore logic ========== */
 function restoreStateAfterLoad(){
   const st = loadState();
   if(!st) return false;
-  // ensure allWords contains all lines from saved snapshot
   const map = new Map(allWords.map(w=>[w.rawLine,w]));
   for(const r of st.allRaw || []) if(!map.has(r)){
     const obj = parseSingleLineToObj(r);
     if(obj){ allWords.push(obj); map.set(r,obj); }
   }
-  // restore orderRaw (remaining), but filter by current server allWords
   const serverRawSet = new Set(allWords.map(w=>w.rawLine));
   orderRaw = (Array.isArray(st.orderRaw) ? st.orderRaw.slice() : []).filter(r => serverRawSet.has(r));
-  // if server has new lines not in snapshot, append them to orderRaw (so new words will be asked)
   const oldSnap = Array.isArray(st.allRaw) ? new Set(st.allRaw) : new Set([]);
   const toAdd = allWords.map(w=>w.rawLine).filter(r => !oldSnap.has(r));
   for(const r of toAdd){
     if(!orderRaw.includes(r) && r !== st.currentRaw && !st.correctsRaw?.includes(r) && !st.mistakesRaw?.includes(r)) orderRaw.push(r);
   }
-  // restore mistakes/corrects filtered by server
   mistakes = (Array.isArray(st.mistakesRaw) ? st.mistakesRaw.filter(r => serverRawSet.has(r)) : []);
   corrects = (Array.isArray(st.correctsRaw) ? st.correctsRaw.filter(r => serverRawSet.has(r)) : []);
   currentRaw = (st.currentRaw && serverRawSet.has(st.currentRaw)) ? st.currentRaw : null;
@@ -258,7 +249,7 @@ function restoreStateAfterLoad(){
   return true;
 }
 
-/* ========== Helpers for UI ========== */
+/* ========== Helpers ========== */
 function updateProgress(){
   const total = allWords.length;
   const done = total - orderRaw.length;
@@ -270,14 +261,13 @@ function renderLists(){
   mistakeListDiv.innerHTML = mistakes.length ? mistakes.map(c=>`<div>${escapeHtml(c)}</div>`).join('') : '—';
 }
 
-/* ========== Order management & showing words (non-repeat) ========== */
+/* ========== Order & showing ========== */
 function prepareOrder(source='all'){
   if(source === 'all'){
     orderRaw = allWords.map(w=>w.rawLine);
     shuffle(orderRaw);
     mode = 'all';
   } else {
-    // mistakes mode
     orderRaw = mistakes.slice();
     shuffle(orderRaw);
     mode = 'mistakes';
@@ -285,8 +275,34 @@ function prepareOrder(source='all'){
   saveState();
 }
 
+/* Рисует текущий currentRaw без сдвига (используется при восстановлении) */
+function displayCurrentRaw(){
+  if(!currentRaw){
+    nextWord();
+    return;
+  }
+  const obj = allWords.find(w=>w.rawLine===currentRaw) || parseSingleLineToObj(currentRaw);
+  let displayArabic = (obj && obj.arabicFull) ? obj.arabicFull : (currentRaw || '');
+  displayArabic = displayArabic.replace(/\s*-\s*/g,' - ').trim();
+  arabicWordDiv.textContent = displayArabic || '[нет арабского]';
+  arabicWordDiv.setAttribute('dir','rtl');
+
+  const correctText = (obj && obj.rusVariants) ? obj.rusVariants.join(', ') : '(нет перевода)';
+  const distractors = findDistractorsFor(obj||{pos:'noun', rawLine:currentRaw}, 2);
+  const options = [correctText, (distractors[0]?.rusVariants||[]).join(', ') || '—', (distractors[1]?.rusVariants||[]).join(', ') || '—'];
+  shuffle(options);
+  optButtons.forEach((btn,idx) => {
+    btn.textContent = options[idx] || '';
+    btn.disabled = false;
+    btn.classList.remove('correct','wrong');
+    btn.dataset.correct = (options[idx] === correctText) ? '1' : '0';
+  });
+  updateProgress();
+  renderLists();
+}
+
+/* Берёт следующий элемент (удаляя его из orderRaw) */
 function nextWord(){
-  // if no remaining -> prepare
   if(!orderRaw || orderRaw.length === 0){
     if(mode === 'mistakes' && mistakes.length === 0){
       arabicWordDiv.textContent = 'Ошибок нет.';
@@ -300,13 +316,11 @@ function nextWord(){
     updateProgress();
     return;
   }
-  // take next (shift -> removed from remaining immediately)
   const raw = orderRaw.shift();
   currentRaw = raw;
-  saveState(); // persist immediately so it won't repeat on reload
+  saveState();
 
-  const obj = allWords.find(w => w.rawLine === raw) || parseSingleLineToObj(raw) || { rawLine: raw, arabicFull: raw, rusVariants: [''] };
-  // display arabic
+  const obj = allWords.find(w=>w.rawLine===raw) || parseSingleLineToObj(raw) || { rawLine:raw, arabicFull:raw, rusVariants:[''] };
   let displayArabic = (obj.arabicFull || '').trim();
   if(!displayArabic){
     const sep = raw.indexOf('-');
@@ -316,7 +330,6 @@ function nextWord(){
   arabicWordDiv.textContent = displayArabic || '[нет арабского]';
   arabicWordDiv.setAttribute('dir','rtl');
 
-  // prepare options: show full rusVariants as comma-separated for the correct option
   const correctText = (obj.rusVariants||[]).join(', ') || '(нет перевода)';
   const distractors = findDistractorsFor(obj, 2);
   const options = [correctText, (distractors[0]?.rusVariants||[]).join(', ') || '—', (distractors[1]?.rusVariants||[]).join(', ') || '—'];
@@ -331,59 +344,42 @@ function nextWord(){
   renderLists();
 }
 
-/* find distractors by pos then fallback */
 function findDistractorsFor(correctObj, count){
-  const same = allWords.filter(w => w.pos === correctObj.pos && w.rawLine !== correctObj.rawLine);
+  const same = allWords.filter(w => w.pos === (correctObj&&correctObj.pos) && w.rawLine !== (correctObj&&correctObj.rawLine));
   shuffle(same);
   const picks = same.slice(0,count);
   if(picks.length < count){
-    const others = allWords.filter(w => w.rawLine !== correctObj.rawLine && !picks.includes(w));
+    const others = allWords.filter(w => w.rawLine !== (correctObj&&correctObj.rawLine) && !picks.includes(w));
     shuffle(others);
-    for(const o of others){
-      if(picks.length>=count) break;
-      picks.push(o);
-    }
+    for(const o of others){ if(picks.length>=count) break; picks.push(o); }
   }
-  while(picks.length < count) picks.push(correctObj);
+  while(picks.length < count) picks.push(correctObj||{rusVariants:['']});
   return picks.slice(0,count);
 }
 
-/* ========== Option button handlers ========== */
-optButtons.forEach(btn => {
-  btn.addEventListener('click', (e) => {
+/* ========== Варианты (кнопки) ========== */
+optButtons.forEach(btn=>{
+  btn.addEventListener('click', (e)=>{
     const chosen = e.currentTarget;
     const isCorrect = chosen.dataset.correct === '1';
     optButtons.forEach(b=>b.disabled=true);
     const curRaw = currentRaw;
-    const obj = allWords.find(w => w.rawLine === curRaw) || parseSingleLineToObj(curRaw) || { rawLine: curRaw, arabicFull: curRaw, rusVariants: [''] };
+    const obj = allWords.find(w=>w.rawLine===curRaw) || parseSingleLineToObj(curRaw) || { rawLine:curRaw, arabicFull:curRaw, rusVariants:[''] };
     if(isCorrect){
       chosen.classList.add('correct');
-      // store full rawLine into corrects for display (user asked full raw)
-      corrects.push(obj.rawLine);
-      renderLists();
-      saveState();
-      // short delay so user sees highlight
-      setTimeout(()=> {
-        currentRaw = null;
-        if(orderRaw.length === 0) finishSession(); else nextWord();
-      }, 450);
+      if(!corrects.includes(obj.rawLine)) corrects.push(obj.rawLine);
+      renderLists(); saveState();
+      setTimeout(()=>{ currentRaw=null; if(orderRaw.length===0) finishSession(); else nextWord(); }, 450);
     } else {
       chosen.classList.add('wrong');
-      // add to mistakes as rawLine but avoid duplicates
       if(!mistakes.includes(obj.rawLine)) mistakes.push(obj.rawLine);
-      renderLists();
-      saveState();
-      // show modal with correct raw and rus variants; after close -> next
-      const correctText = obj.rawLine;
-      showWrongModal(obj.arabicFull || obj.rawLine, (obj.rusVariants||[]).join(', '), ()=> {
-        currentRaw = null;
-        if(orderRaw.length === 0) finishSession(); else nextWord();
-      });
+      renderLists(); saveState();
+      showWrongModal(obj.arabicFull||obj.rawLine, (obj.rusVariants||[]).join(', '), ()=>{ currentRaw=null; if(orderRaw.length===0) finishSession(); else nextWord(); });
     }
   });
 });
 
-/* ========== Modal (17s auto-close) ========== */
+/* ========== Модалка 17с ========== */
 let modalTimer = null;
 function showWrongModal(arabicText, ruText, onClose){
   closeModal();
@@ -400,18 +396,17 @@ function showWrongModal(arabicText, ruText, onClose){
 }
 function closeModal(){ modalRoot.innerHTML=''; if(modalTimer){ clearTimeout(modalTimer); modalTimer=null; } }
 
-/* ========== Finish session ========== */
+/* ========== Завершение / списки ========== */
 function finishSession(){
   const total = allWords.length || 0;
   const done = total - (orderRaw.length || 0);
   arabicWordDiv.textContent = `Готово! Пройдено ${done}/${total}, ошибок: ${mistakes.length}`;
   afterDiv.classList.remove('hidden');
   workMistakesBtn.classList.toggle('hidden', mistakes.length === 0);
-  saveState();
-  renderLists();
+  saveState(); renderLists();
 }
 
-/* ========== Add new words (only truly new) ========== */
+/* ========== Добавление новых слов (как раньше) ========== */
 async function addNewWords(){
   try{
     const txt = await robustFetchWords();
@@ -421,122 +416,75 @@ async function addNewWords(){
     for(const p of parsed){
       if(!existingSet.has(p.rawLine) && !corrects.includes(p.rawLine) && !mistakes.includes(p.rawLine)){
         allWords.push(p);
-        // append to orderRaw only if not present
         if(!orderRaw.includes(p.rawLine) && p.rawLine !== currentRaw) orderRaw.push(p.rawLine);
-        added++;
-        existingSet.add(p.rawLine);
+        added++; existingSet.add(p.rawLine);
       }
     }
     countSpan.textContent = `Загружено слов: ${allWords.length}`;
-    saveState();
-    alert('Добавлено новых слов: ' + added);
-  }catch(e){
-    console.error(e);
-    alert('Ошибка при добавлении слов (см. консоль).');
-  }
+    saveState(); alert('Добавлено новых слов: ' + added);
+  }catch(e){ console.error(e); alert('Ошибка при добавлении слов (см. консоль).'); }
 }
 
-/* ========== Reset progress (clears lists and shows dua) ========== */
+/* ========== Сброс прогресса: без confirm, сразу возврат на дуа ========== */
 function resetProgress(){
-  if(!confirm('Сбросить прогресс?')) return;
+  // убираем confirm: выполняем сброс сразу
   try{ localStorage.removeItem(STORAGE_KEY); }catch(e){}
-  // re-init in-memory structures
-  orderRaw = allWords.map(w=>w.rawLine);
-  shuffle(orderRaw);
+  orderRaw = allWords.map(w=>w.rawLine); shuffle(orderRaw);
   currentRaw = null;
-  mistakes = [];
-  corrects = [];
-  mode = 'all';
+  mistakes = []; corrects = []; mode='all';
   correctListDiv.innerHTML = '—';
   mistakeListDiv.innerHTML = '—';
   trainer.classList.add('hidden');
   loader.classList.remove('hidden');
-  // show dua again
   document.getElementById('intro').classList.remove('hidden');
+  saveState();
 }
 
-/* ========== Copy mistakes ========== */
+/* ========== Копирование ошибок ========== */
 function copyMistakes(){
   if(!mistakes.length) return alert('Ошибок нет.');
   const text = mistakes.join('\n');
   navigator.clipboard.writeText(text).then(()=> alert('Ошибки скопированы')).catch(()=> alert('Не удалось скопировать'));
 }
 
-/* ========== UI handlers (load, buttons) ========== */
-
-/* Новый didDua: при клике автоматически подгружает words.txt, пытается восстановить прогресс и запускает тренировку */
+/* ========== Обработчики UI ========== */
 didDuaBtn.addEventListener('click', async () => {
-  // скрыть дуа
+  // скрываем дуа
   document.getElementById('intro').classList.add('hidden');
+  // показываем индикатор загрузки
+  loader.classList.remove('hidden'); trainer.classList.add('hidden');
 
-  // попытка авто-подгрузки слов с сервера
   try {
     const txt = await robustFetchWords();
     const { parsed, skipped } = improvedParseText(txt);
     allWords = parsed.slice();
     countSpan.textContent = `Загружено слов: ${allWords.length}`;
 
-    // если есть сохранённое состояние — восстановим (и дополним новыми строками)
     const restored = restoreStateAfterLoad();
 
-    // если не восстановилось — инициализируем новую очередь
     if(!restored){
-      orderRaw = allWords.map(w=>w.rawLine);
-      shuffle(orderRaw);
-      mistakes = [];
-      corrects = [];
-      currentRaw = null;
-      mode = 'all';
+      orderRaw = allWords.map(w=>w.rawLine); shuffle(orderRaw);
+      mistakes=[]; corrects=[]; currentRaw=null; mode='all';
       saveState();
     }
 
-    // скрыть loader и показать тренажёр
     loader.classList.add('hidden');
     trainer.classList.remove('hidden');
-    renderLists();
 
-    // если был текущий элемент — отобразим его, иначе начнём со следующего
+    // если есть текущий сохранённый элемент — отрисовать его (включая варианты)
     if(currentRaw){
-      const obj = allWords.find(w=>w.rawLine===currentRaw) || parseSingleLineToObj(currentRaw);
-      if(obj && obj.arabicFull) arabicWordDiv.textContent = obj.arabicFull;
-      else arabicWordDiv.textContent = currentRaw || '';
-      updateProgress();
+      displayCurrentRaw();
     } else {
       nextWord();
     }
 
     if(skipped && skipped.length) console.warn('Некоторые строки не распознаны (нет дефиса):', skipped.slice(0,20));
+
   } catch(err) {
     console.warn('Автозагрузка words.txt не удалась:', err);
-    // если не получилось — покажем loader чтобы пользователь мог нажать "Загрузить из words.txt" вручную
+    // если не получилось — оставляем экран дуа (пользователь увидит сообщение/может позже)
     loader.classList.remove('hidden');
     trainer.classList.add('hidden');
-  }
-});
-
-/* Кнопка "Загрузить из words.txt" (на всякий случай) */
-fetchFileBtn.addEventListener('click', async () => {
-  try{
-    const txt = await robustFetchWords();
-    const { parsed, skipped } = improvedParseText(txt);
-    allWords = parsed.slice();
-    countSpan.textContent = `Загружено слов: ${allWords.length}`;
-    if(restoreStateAfterLoad()){
-      loader.classList.add('hidden');
-      trainer.classList.add('hidden');
-      renderLists();
-    } else {
-      orderRaw = allWords.map(w=>w.rawLine);
-      shuffle(orderRaw);
-      mistakes=[]; corrects=[]; currentRaw=null; mode='all';
-      loader.classList.add('hidden');
-      trainer.classList.add('hidden');
-    }
-    if(skipped.length) console.warn('Skipped lines (no dash):', skipped.slice(0,30));
-    saveState();
-  }catch(e){
-    console.error(e);
-    alert('Не удалось загрузить words.txt (см. консоль).');
   }
 });
 
@@ -546,8 +494,7 @@ copyMistakesBtn.addEventListener('click', copyMistakes);
 
 retryAllBtn.addEventListener('click', ()=> {
   prepareOrder('all');
-  currentRaw = null;
-  mistakes = []; corrects = [];
+  currentRaw = null; mistakes=[]; corrects=[];
   saveState();
   trainer.classList.remove('hidden'); loader.classList.add('hidden');
   nextWord();
@@ -558,35 +505,27 @@ workMistakesBtn.addEventListener('click', ()=> {
   prepareOrder('mistakes');
   saveState();
   trainer.classList.remove('hidden'); loader.classList.add('hidden');
-  loader.classList.add('hidden'); trainer.classList.remove('hidden');
   nextWord();
 });
 
-/* ========== Restore on load (but show dua first) ========== */
+/* ========== Инициализация: пробуем заранее подгрузить словарь, но показываем дуа ========= */
 (async function init(){
   try{
-    // предварительно попытаемся загрузить словарь (но не запускать тренировку)
     const txt = await robustFetchWords().catch(()=>null);
     if(txt){
       const { parsed } = improvedParseText(txt);
       allWords = parsed.slice();
       countSpan.textContent = `Загружено слов: ${allWords.length}`;
-      // попытка восстановления: если есть локальное состояние — восстановим, но покажем дуа (пользователь нажмёт "Я сделал дуа")
       if(restoreStateAfterLoad()){
+        // показываем дуа — пользователь нажмёт "Я сделал дуа", и тогда мы отрисуем текущее
         document.getElementById('intro').classList.remove('hidden');
-        loader.classList.add('hidden');
-        trainer.classList.add('hidden');
-        renderLists();
-        updateProgress();
-        return;
+        loader.classList.add('hidden'); trainer.classList.add('hidden');
+        renderLists(); updateProgress(); return;
       } else {
-        // нет состояния — подготовим очередь и покажем дуа
         orderRaw = allWords.map(w=>w.rawLine); shuffle(orderRaw);
         document.getElementById('intro').classList.remove('hidden');
         loader.classList.add('hidden'); trainer.classList.add('hidden');
-        updateProgress();
-        saveState();
-        return;
+        updateProgress(); saveState(); return;
       }
     } else {
       document.getElementById('intro').classList.remove('hidden');
@@ -599,7 +538,6 @@ workMistakesBtn.addEventListener('click', ()=> {
   }
 })();
 
-/* Save periodically and on leave */
 window.addEventListener('beforeunload', saveState);
 window.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') saveState(); });
 
