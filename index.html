@@ -58,7 +58,7 @@
       <p class="small">Вставьте/подгрузите список слов (формат: перевод(ы) - арабская_форма1 - арабская_форма2)</p>
       <textarea id="text-input" placeholder="пример: жаловаться - اِشْتَكَى - يَشْتَكِي"></textarea>
       <div style="margin-top:8px">
-        <button id="load-manual" class="button">Загрузить вручную</button>
+        <!-- кнопка "Загрузить вручную" удалена по запросу -->
         <button id="fetch-file" class="button">Загрузить из words.txt</button>
         <span id="count" class="small"></span>
       </div>
@@ -124,7 +124,6 @@ let mode = 'all';       // 'all' или 'mistakes'
 const didDuaBtn = document.getElementById('did-dua');
 const loader = document.getElementById('loader');
 const textInput = document.getElementById('text-input');
-const loadManualBtn = document.getElementById('load-manual');
 const fetchFileBtn = document.getElementById('fetch-file');
 const countSpan = document.getElementById('count');
 
@@ -453,10 +452,10 @@ function resetProgress(){
   trainer.classList.add('hidden');
   loader.classList.remove('hidden');
   // show dua again
+  document.getElementById('intro').classList.remove('hidden');
 }
 
-/* ========== Copy mistakes ==========
-   copy rawLine list (as requested by user) */
+/* ========== Copy mistakes ========== */
 function copyMistakes(){
   if(!mistakes.length) return alert('Ошибок нет.');
   const text = mistakes.join('\n');
@@ -464,58 +463,73 @@ function copyMistakes(){
 }
 
 /* ========== UI handlers (load, buttons) ========== */
-didDuaBtn.addEventListener('click', () => {
+
+/* Новый didDua: при клике автоматически подгружает words.txt, пытается восстановить прогресс и запускает тренировку */
+didDuaBtn.addEventListener('click', async () => {
+  // скрыть дуа
   document.getElementById('intro').classList.add('hidden');
-  // show loader or trainer depending on whether words have been loaded / restored
-  if(allWords.length === 0){
-    loader.classList.remove('hidden'); trainer.classList.add('hidden');
-  } else {
-    loader.classList.add('hidden'); trainer.classList.remove('hidden');
-    // if we had currentRaw restored, show it, else start next
+
+  // попытка авто-подгрузки слов с сервера
+  try {
+    const txt = await robustFetchWords();
+    const { parsed, skipped } = improvedParseText(txt);
+    allWords = parsed.slice();
+    countSpan.textContent = `Загружено слов: ${allWords.length}`;
+
+    // если есть сохранённое состояние — восстановим (и дополним новыми строками)
+    const restored = restoreStateAfterLoad();
+
+    // если не восстановилось — инициализируем новую очередь
+    if(!restored){
+      orderRaw = allWords.map(w=>w.rawLine);
+      shuffle(orderRaw);
+      mistakes = [];
+      corrects = [];
+      currentRaw = null;
+      mode = 'all';
+      saveState();
+    }
+
+    // скрыть loader и показать тренажёр
+    loader.classList.add('hidden');
+    trainer.classList.remove('hidden');
+    renderLists();
+
+    // если был текущий элемент — отобразим его, иначе начнём со следующего
     if(currentRaw){
-      const obj = allWords.find(w=>w.rawLine === currentRaw) || parseSingleLineToObj(currentRaw);
-      arabicWordDiv.textContent = (obj && obj.arabicFull) ? obj.arabicFull : (currentRaw || '');
+      const obj = allWords.find(w=>w.rawLine===currentRaw) || parseSingleLineToObj(currentRaw);
+      if(obj && obj.arabicFull) arabicWordDiv.textContent = obj.arabicFull;
+      else arabicWordDiv.textContent = currentRaw || '';
       updateProgress();
     } else {
       nextWord();
     }
+
+    if(skipped && skipped.length) console.warn('Некоторые строки не распознаны (нет дефиса):', skipped.slice(0,20));
+  } catch(err) {
+    console.warn('Автозагрузка words.txt не удалась:', err);
+    // если не получилось — покажем loader чтобы пользователь мог нажать "Загрузить из words.txt" вручную
+    loader.classList.remove('hidden');
+    trainer.classList.add('hidden');
   }
 });
 
-loadManualBtn.addEventListener('click', () => {
-  const t = textInput.value;
-  if(!t || !t.trim()) return alert('Вставьте список слов.');
-  const { parsed, skipped } = improvedParseText(t);
-  allWords = parsed.slice();
-  countSpan.textContent = `Загружено слов: ${allWords.length}`;
-  // initialize queue and show trainer
-  orderRaw = allWords.map(w=>w.rawLine);
-  shuffle(orderRaw);
-  mistakes=[]; corrects=[]; currentRaw=null; mode='all';
-  loader.classList.add('hidden'); trainer.classList.remove('hidden');
-  renderLists(); saveState(); nextWord();
-  if(skipped.length) console.warn('Skipped lines (no dash):', skipped.slice(0,30));
-});
-
+/* Кнопка "Загрузить из words.txt" (на всякий случай) */
 fetchFileBtn.addEventListener('click', async () => {
   try{
     const txt = await robustFetchWords();
     const { parsed, skipped } = improvedParseText(txt);
     allWords = parsed.slice();
     countSpan.textContent = `Загружено слов: ${allWords.length}`;
-    // try restore if saved state exists; but still show dua until user clicks
     if(restoreStateAfterLoad()){
       loader.classList.add('hidden');
-      // show intro to let user click "Я сделал дуа"
       trainer.classList.add('hidden');
       renderLists();
     } else {
-      // initialize fresh
       orderRaw = allWords.map(w=>w.rawLine);
       shuffle(orderRaw);
       mistakes=[]; corrects=[]; currentRaw=null; mode='all';
       loader.classList.add('hidden');
-      // show intro
       trainer.classList.add('hidden');
     }
     if(skipped.length) console.warn('Skipped lines (no dash):', skipped.slice(0,30));
@@ -531,7 +545,6 @@ resetProgressBtn.addEventListener('click', resetProgress);
 copyMistakesBtn.addEventListener('click', copyMistakes);
 
 retryAllBtn.addEventListener('click', ()=> {
-  // restart full run (without clearing storage) — rebuild order from allWords
   prepareOrder('all');
   currentRaw = null;
   mistakes = []; corrects = [];
@@ -545,7 +558,6 @@ workMistakesBtn.addEventListener('click', ()=> {
   prepareOrder('mistakes');
   saveState();
   trainer.classList.remove('hidden'); loader.classList.add('hidden');
-  // show trainer
   loader.classList.add('hidden'); trainer.classList.remove('hidden');
   nextWord();
 });
@@ -553,15 +565,14 @@ workMistakesBtn.addEventListener('click', ()=> {
 /* ========== Restore on load (but show dua first) ========== */
 (async function init(){
   try{
-    // try to load words from server to know dictionary early (no automatic start)
+    // предварительно попытаемся загрузить словарь (но не запускать тренировку)
     const txt = await robustFetchWords().catch(()=>null);
     if(txt){
       const { parsed } = improvedParseText(txt);
       allWords = parsed.slice();
       countSpan.textContent = `Загружено слов: ${allWords.length}`;
-      // try restore state
+      // попытка восстановления: если есть локальное состояние — восстановим, но покажем дуа (пользователь нажмёт "Я сделал дуа")
       if(restoreStateAfterLoad()){
-        // show dua screen (user must click to continue)
         document.getElementById('intro').classList.remove('hidden');
         loader.classList.add('hidden');
         trainer.classList.add('hidden');
@@ -569,7 +580,7 @@ workMistakesBtn.addEventListener('click', ()=> {
         updateProgress();
         return;
       } else {
-        // no saved state -> show dua and loader to let user start
+        // нет состояния — подготовим очередь и покажем дуа
         orderRaw = allWords.map(w=>w.rawLine); shuffle(orderRaw);
         document.getElementById('intro').classList.remove('hidden');
         loader.classList.add('hidden'); trainer.classList.add('hidden');
@@ -578,7 +589,6 @@ workMistakesBtn.addEventListener('click', ()=> {
         return;
       }
     } else {
-      // no words fetched -> show loader so user can paste or fetch
       document.getElementById('intro').classList.remove('hidden');
       loader.classList.remove('hidden'); trainer.classList.add('hidden');
     }
