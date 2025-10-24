@@ -184,23 +184,24 @@ function improvedParseText(text){
   return { parsed, skipped };
 }
 
-/* ========== robust fetch ========== */
-async function robustFetchWords(){
+/* ========== robust fetch (accepts noCache flag) ========== */
+async function robustFetchWords(noCache = false){
   const tries = ['words.txt','./words.txt'];
   try{ tries.push(location.pathname.replace(/\/[^/]*$/,'/') + 'words.txt'); }catch(e){}
   for(const p of tries){
     try{
-      const r = await fetch(p);
-      if(r.ok) return await r.text();
+      const opts = noCache ? { cache: 'no-store' } : undefined;
+      const r = await fetch(p, opts);
+      if(r && r.ok) return await r.text();
     }catch(e){}
   }
   try{
     const user = location.hostname.split('.')[0] || '';
     const repo = (location.pathname.split('/').filter(Boolean)[0] || '');
     if(user && repo){
-      const raw = `https://raw.githubusercontent.com/${user}/${repo}/main/words.txt`;
-      const r2 = await fetch(raw);
-      if(r2.ok) return await r2.text();
+      const raw = `https://raw.githubusercontent.com/${user}/${repo}/main/words.txt?t=${Date.now()}`;
+      const r2 = await fetch(raw, noCache ? { cache: 'no-store' } : undefined);
+      if(r2 && r2.ok) return await r2.text();
     }
   }catch(e){}
   throw new Error('Не удалось загрузить words.txt автоматически');
@@ -408,23 +409,41 @@ function finishSession(){
   saveState(); renderLists();
 }
 
-/* ========== Добавление новых слов (как раньше) ========== */
+/* ========== Добавление новых слов — исправленная версия ========== */
 async function addNewWords(){
   try{
-    const txt = await robustFetchWords();
+    // используем noCache=true чтобы гарантировать свежую версию файла
+    const txt = await robustFetchWords(true);
     const { parsed } = improvedParseText(txt);
+    if(!Array.isArray(parsed)) return alert('Нет парсируемых строк в words.txt');
+
+    // набор уже известных rawLine
     const existingSet = new Set(allWords.map(w=>w.rawLine));
     let added = 0;
+
+    // Добавляем объекты в allWords и вставляем raw'ы в orderRaw в случайные позиции
     for(const p of parsed){
       if(!existingSet.has(p.rawLine) && !corrects.includes(p.rawLine) && !mistakes.includes(p.rawLine)){
         allWords.push(p);
-        if(!orderRaw.includes(p.rawLine) && p.rawLine !== currentRaw) orderRaw.push(p.rawLine);
-        added++; existingSet.add(p.rawLine);
+        // вставляем raw в случайную позицию в orderRaw (после текущего индекса)
+        const pos = Math.floor(Math.random() * (orderRaw.length + 1)); // от 0 до orderRaw.length
+        orderRaw.splice(pos, 0, p.rawLine);
+        added++;
+        existingSet.add(p.rawLine);
       }
     }
-    countSpan.textContent = `Загружено слов: ${allWords.length}`; // остаётся для отладки (скрыт через CSS)
-    saveState(); alert('Добавлено новых слов: ' + added);
-  }catch(e){ console.error(e); alert('Ошибка при добавлении слов (см. консоль).'); }
+
+    if(added === 0){
+      alert('Новых слов не найдено.');
+    } else {
+      saveState();
+      updateProgress();
+      alert('Добавлено новых слов: ' + added);
+    }
+  }catch(e){
+    console.error(e);
+    alert('Ошибка при добавлении слов (см. консоль).');
+  }
 }
 
 /* ========== Сброс прогресса: без confirm, сразу возврат на дуа ========== */
@@ -454,7 +473,7 @@ didDuaBtn.addEventListener('click', async () => {
   loader.classList.remove('hidden'); trainer.classList.add('hidden');
 
   try {
-    const txt = await robustFetchWords();
+    const txt = await robustFetchWords(); // обычная загрузка — кеширование нормальное
     const { parsed, skipped } = improvedParseText(txt);
     allWords = parsed.slice();
     countSpan.textContent = `Загружено слов: ${allWords.length}`;
