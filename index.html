@@ -234,10 +234,7 @@ function restoreStateAfterLoad(){
   const st = loadState();
   if(!st) return false;
   const map = new Map(allWords.map(w=>[w.rawLine,w]));
-  for(const r of st.allRaw || []) if(!map.has(r)){
-    const obj = parseSingleLineToObj(r);
-    if(obj){ allWords.push(obj); map.set(r,obj); }
-  }
+  // Removed: adding back from st.allRaw
   const serverRawSet = new Set(allWords.map(w=>w.rawLine));
   orderRaw = (Array.isArray(st.orderRaw) ? st.orderRaw.slice() : []).filter(r => serverRawSet.has(r));
   const oldSnap = Array.isArray(st.allRaw) ? new Set(st.allRaw) : new Set([]);
@@ -446,18 +443,26 @@ async function addNewWords(){
   }
 }
 
-/* ========== Сброс прогресса: без confirm, сразу возврат на дуа ========== */
-function resetProgress(){
+/* ========== Сброс прогресса: с перезагрузкой слов из файла ========== */
+async function resetProgress(){
   try{ localStorage.removeItem(STORAGE_KEY); }catch(e){}
-  orderRaw = allWords.map(w=>w.rawLine); shuffle(orderRaw);
-  currentRaw = null;
-  mistakes = []; corrects = []; mode='all';
-  correctListDiv.innerHTML = '—';
-  mistakeListDiv.innerHTML = '—';
-  trainer.classList.add('hidden');
-  loader.classList.remove('hidden');
-  document.getElementById('intro').classList.remove('hidden');
-  saveState();
+  try {
+    const txt = await robustFetchWords(true);
+    const { parsed } = improvedParseText(txt);
+    allWords = parsed.slice();
+    orderRaw = allWords.map(w=>w.rawLine); shuffle(orderRaw);
+    currentRaw = null;
+    mistakes = []; corrects = []; mode='all';
+    correctListDiv.innerHTML = '—';
+    mistakeListDiv.innerHTML = '—';
+    trainer.classList.add('hidden');
+    loader.classList.remove('hidden');
+    document.getElementById('intro').classList.remove('hidden');
+    saveState();
+  } catch(e) {
+    console.error(e);
+    alert('Ошибка при сбросе прогресса (не удалось загрузить words.txt).');
+  }
 }
 
 /* ========== Копирование ошибок ========== */
