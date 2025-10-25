@@ -238,10 +238,6 @@ function restoreStateAfterLoad(){
   const serverRawSet = new Set(allWords.map(w=>w.rawLine));
   orderRaw = (Array.isArray(st.orderRaw) ? st.orderRaw.slice() : []).filter(r => serverRawSet.has(r));
   const oldSnap = Array.isArray(st.allRaw) ? new Set(st.allRaw) : new Set([]);
-  const toAdd = allWords.map(w=>w.rawLine).filter(r => !oldSnap.has(r));
-  for(const r of toAdd){
-    if(!orderRaw.includes(r) && r !== st.currentRaw && !st.correctsRaw?.includes(r) && !st.mistakesRaw?.includes(r)) orderRaw.push(r);
-  }
   mistakes = (Array.isArray(st.mistakesRaw) ? st.mistakesRaw.filter(r => serverRawSet.has(r)) : []);
   corrects = (Array.isArray(st.correctsRaw) ? st.correctsRaw.filter(r => serverRawSet.has(r)) : []);
   currentRaw = (st.currentRaw && serverRawSet.has(st.currentRaw)) ? st.currentRaw : null;
