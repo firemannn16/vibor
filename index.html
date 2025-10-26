@@ -111,6 +111,13 @@ const AUTO_MODAL_CLOSE_MS = 17000;
 function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
+/* ========== НОВАЯ ФУНКЦИЯ: Сравнение слов по содержимому ========== */
+function getWordContentHash(wordObj) {
+  const rusContent = (wordObj.rusVariants || []).join('|');
+  const arabContent = wordObj.arabicFull;
+  return `${rusContent}|||${arabContent}`;
+}
+
 /* ========== Состояния ========== */
 let allWords = [];      // { rawLine, arabicFull, rusVariants[], pos }
 let orderRaw = [];      // remaining rawLine'ы (не показаны ещё)
@@ -230,18 +237,45 @@ function parseSingleLineToObj(line){
 }
 
 /* ========== Restore logic ========== */
-function restoreStateAfterLoad(){
+function restoreStateAfterLoad(serverWords){
   const st = loadState();
   if(!st) return false;
-  const map = new Map(allWords.map(w=>[w.rawLine,w]));
-  // Removed: adding back from st.allRaw
-  const serverRawSet = new Set(allWords.map(w=>w.rawLine));
-  orderRaw = (Array.isArray(st.orderRaw) ? st.orderRaw.slice() : []).filter(r => serverRawSet.has(r));
-  const oldSnap = Array.isArray(st.allRaw) ? new Set(st.allRaw) : new Set([]);
-  mistakes = (Array.isArray(st.mistakesRaw) ? st.mistakesRaw.filter(r => serverRawSet.has(r)) : []);
-  corrects = (Array.isArray(st.correctsRaw) ? st.correctsRaw.filter(r => serverRawSet.has(r)) : []);
+  
+  // Восстанавливаем allWords из сохраненных raw
+  allWords = (st.allRaw || []).map(raw => parseSingleLineToObj(raw) || {rawLine: raw});
+  
+  const serverRawSet = new Set(serverWords.map(w => w.rawLine));
+  
+  // 1. Удаляем удаленные слова
+  allWords = allWords.filter(w => serverRawSet.has(w.rawLine));
+  
+  orderRaw = (st.orderRaw || []).filter(r => serverRawSet.has(r));
+  mistakes = (st.mistakesRaw || []).filter(r => serverRawSet.has(r));
+  corrects = (st.correctsRaw || []).filter(r => serverRawSet.has(r));
   currentRaw = (st.currentRaw && serverRawSet.has(st.currentRaw)) ? st.currentRaw : null;
   mode = st.mode || 'all';
+  
+  // 2. Обновляем измененные слова
+  const serverByRaw = new Map(serverWords.map(w => [w.rawLine, w]));
+  const changedWords = [];
+  
+  allWords.forEach((existing, index) => {
+    const serverWord = serverByRaw.get(existing.rawLine);
+    if (serverWord && getWordContentHash(existing) !== getWordContentHash(serverWord)) {
+      allWords[index] = serverWord;
+      changedWords.push(serverWord.rawLine);
+    }
+  });
+  
+  // Сбрасываем прогресс для измененных
+  changedWords.forEach(raw => {
+    mistakes = mistakes.filter(r => r !== raw);
+    corrects = corrects.filter(r => r !== raw);
+    if (!orderRaw.includes(raw)) {
+      orderRaw.unshift(raw); // В начало очереди
+    }
+  });
+  
   return true;
 }
 
@@ -392,6 +426,63 @@ function showWrongModal(arabicText, ruText, onClose){
 }
 function closeModal(){ modalRoot.innerHTML=''; if(modalTimer){ clearTimeout(modalTimer); modalTimer=null; } }
 
+/* ========== НОВАЯ: Модал подтверждения сброса ========== */
+function showResetModal() {
+  closeModal();
+  const overlay = document.createElement('div'); overlay.className = 'overlay';
+  const modal = document.createElement('div'); modal.className = 'modal';
+  modal.innerHTML = `
+    <div><strong>Подтверждение сброса</strong></div>
+    <div style="margin-top:12px">Вы уверены? Все выученные слова и прогресс будут потеряны. Это действие нельзя отменить.</div>
+    <div style="text-align:right;margin-top:16px">
+      <button id="modal-cancel" class="button" style="margin-right:8px">Отмена</button>
+      <button id="modal-confirm" class="button" style="background:#fff0f0;border-color:#f0b6b6">Да, сбросить</button>
+    </div>
+  `;
+  overlay.appendChild(modal);
+  modalRoot.appendChild(overlay);
+
+  function cleanup() {
+    document.removeEventListener('keydown', onKey);
+    overlay.removeEventListener('click', onOverlay);
+    const cancelBtn = document.getElementById('modal-cancel');
+    const confirmBtn = document.getElementById('modal-confirm');
+    if (cancelBtn) cancelBtn.removeEventListener('click', onCancel);
+    if (confirmBtn) confirmBtn.removeEventListener('click', onConfirm);
+    if(overlay.parentNode) overlay.parentNode.removeChild(overlay);
+  }
+  function onKey(e) { if (e.key === 'Escape') onCancel(); }
+  function onOverlay(e) { if (e.target === overlay) onCancel(); }
+  function onCancel() { cleanup(); }
+  async function onConfirm() {
+    cleanup();
+    // Сброс с перезагрузкой слов
+    try{ localStorage.removeItem(STORAGE_KEY); }catch(e){}
+    try {
+      const txt = await robustFetchWords(true);
+      const { parsed } = improvedParseText(txt);
+      allWords = parsed.slice();
+      orderRaw = allWords.map(w=>w.rawLine); shuffle(orderRaw);
+      currentRaw = null;
+      mistakes = []; corrects = []; mode='all';
+      correctListDiv.innerHTML = '—';
+      mistakeListDiv.innerHTML = '—';
+      trainer.classList.add('hidden');
+      loader.classList.remove('hidden');
+      document.getElementById('intro').classList.remove('hidden');
+      saveState();
+    } catch(e) {
+      console.error(e);
+      alert('Ошибка при сбросе прогресса (не удалось загрузить words.txt).');
+    }
+  }
+
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', onOverlay);
+  document.getElementById('modal-cancel').addEventListener('click', onCancel);
+  document.getElementById('modal-confirm').addEventListener('click', onConfirm);
+}
+
 /* ========== Завершение / списки ========== */
 function finishSession(){
   const total = allWords.length || 0;
@@ -405,21 +496,17 @@ function finishSession(){
 /* ========== Добавление новых слов — исправленная версия ========== */
 async function addNewWords(){
   try{
-    // используем noCache=true чтобы гарантировать свежую версию файла
     const txt = await robustFetchWords(true);
     const { parsed } = improvedParseText(txt);
     if(!Array.isArray(parsed)) return alert('Нет парсируемых строк в words.txt');
 
-    // набор уже известных rawLine
     const existingSet = new Set(allWords.map(w=>w.rawLine));
     let added = 0;
 
-    // Добавляем объекты в allWords и вставляем raw'ы в orderRaw в случайные позиции
     for(const p of parsed){
-      if(!existingSet.has(p.rawLine) && !corrects.includes(p.rawLine) && !mistakes.includes(p.rawLine)){
+      if(!existingSet.has(p.rawLine)){
         allWords.push(p);
-        // вставляем raw в случайную позицию в orderRaw (после текущего индекса)
-        const pos = Math.floor(Math.random() * (orderRaw.length + 1)); // от 0 до orderRaw.length
+        const pos = Math.floor(Math.random() * (orderRaw.length + 1));
         orderRaw.splice(pos, 0, p.rawLine);
         added++;
         existingSet.add(p.rawLine);
@@ -439,27 +526,7 @@ async function addNewWords(){
   }
 }
 
-/* ========== Сброс прогресса: с перезагрузкой слов из файла ========== */
-async function resetProgress(){
-  try{ localStorage.removeItem(STORAGE_KEY); }catch(e){}
-  try {
-    const txt = await robustFetchWords(true);
-    const { parsed } = improvedParseText(txt);
-    allWords = parsed.slice();
-    orderRaw = allWords.map(w=>w.rawLine); shuffle(orderRaw);
-    currentRaw = null;
-    mistakes = []; corrects = []; mode='all';
-    correctListDiv.innerHTML = '—';
-    mistakeListDiv.innerHTML = '—';
-    trainer.classList.add('hidden');
-    loader.classList.remove('hidden');
-    document.getElementById('intro').classList.remove('hidden');
-    saveState();
-  } catch(e) {
-    console.error(e);
-    alert('Ошибка при сбросе прогресса (не удалось загрузить words.txt).');
-  }
-}
+/* ========== Сброс прогресса: теперь через модал ========== */
 
 /* ========== Копирование ошибок ========== */
 function copyMistakes(){
@@ -468,25 +535,42 @@ function copyMistakes(){
   navigator.clipboard.writeText(text).then(()=> alert('Ошибки скопированы')).catch(()=> alert('Не удалось скопировать'));
 }
 
+/* ========== ИСПРАВЛЕННЫЕ: Загрузка и инициализация ========== */
+async function loadWords() {
+  try {
+    const txt = await robustFetchWords();
+    const { parsed, skipped } = improvedParseText(txt);
+    const serverWords = parsed.slice();
+    
+    countSpan.textContent = `Загружено слов: ${serverWords.length}`;
+    
+    const restored = restoreStateAfterLoad(serverWords);
+    
+    if (!restored) {
+      allWords = serverWords.slice();
+      orderRaw = allWords.map(w=>w.rawLine); shuffle(orderRaw);
+      mistakes = []; corrects = []; currentRaw = null; mode = 'all';
+      saveState();
+    }
+    
+    if(skipped && skipped.length) console.warn('Некоторые строки не распознаны (нет дефиса):', skipped.slice(0,20));
+    
+    return true;
+    
+  } catch(err) {
+    console.warn('Автозагрузка words.txt не удалась:', err);
+    return false;
+  }
+}
+
 /* ========== Обработчики UI ========== */
 didDuaBtn.addEventListener('click', async () => {
   document.getElementById('intro').classList.add('hidden');
   loader.classList.remove('hidden'); trainer.classList.add('hidden');
 
-  try {
-    const txt = await robustFetchWords(); // обычная загрузка — кеширование нормальное
-    const { parsed, skipped } = improvedParseText(txt);
-    allWords = parsed.slice();
-    countSpan.textContent = `Загружено слов: ${allWords.length}`;
-
-    const restored = restoreStateAfterLoad();
-
-    if(!restored){
-      orderRaw = allWords.map(w=>w.rawLine); shuffle(orderRaw);
-      mistakes=[]; corrects=[]; currentRaw=null; mode='all';
-      saveState();
-    }
-
+  const loaded = await loadWords();
+  
+  if (loaded) {
     loader.classList.add('hidden');
     trainer.classList.remove('hidden');
 
@@ -495,18 +579,14 @@ didDuaBtn.addEventListener('click', async () => {
     } else {
       nextWord();
     }
-
-    if(skipped && skipped.length) console.warn('Некоторые строки не распознаны (нет дефиса):', skipped.slice(0,20));
-
-  } catch(err) {
-    console.warn('Автозагрузка words.txt не удалась:', err);
+  } else {
     loader.classList.remove('hidden');
     trainer.classList.add('hidden');
   }
 });
 
 addNewBtn.addEventListener('click', addNewWords);
-resetProgressBtn.addEventListener('click', resetProgress);
+resetProgressBtn.addEventListener('click', showResetModal);
 copyMistakesBtn.addEventListener('click', copyMistakes);
 
 retryAllBtn.addEventListener('click', ()=> {
@@ -528,24 +608,15 @@ workMistakesBtn.addEventListener('click', ()=> {
 /* ========== Инициализация: пробуем заранее подгрузить словарь, но показываем дуа ========= */
 (async function init(){
   try{
-    const txt = await robustFetchWords().catch(()=>null);
-    if(txt){
-      const { parsed } = improvedParseText(txt);
-      allWords = parsed.slice();
-      countSpan.textContent = `Загружено слов: ${allWords.length}`;
-      if(restoreStateAfterLoad()){
-        document.getElementById('intro').classList.remove('hidden');
-        loader.classList.add('hidden'); trainer.classList.add('hidden');
-        renderLists(); updateProgress(); return;
-      } else {
-        orderRaw = allWords.map(w=>w.rawLine); shuffle(orderRaw);
-        document.getElementById('intro').classList.remove('hidden');
-        loader.classList.add('hidden'); trainer.classList.add('hidden');
-        updateProgress(); saveState(); return;
-      }
+    const loaded = await loadWords();
+    if(loaded){
+      document.getElementById('intro').classList.remove('hidden');
+      loader.classList.add('hidden'); trainer.classList.add('hidden');
+      renderLists(); updateProgress(); return;
     } else {
       document.getElementById('intro').classList.remove('hidden');
-      loader.classList.remove('hidden'); trainer.classList.add('hidden');
+      loader.classList.add('hidden'); trainer.classList.add('hidden');
+      updateProgress(); return;
     }
   }catch(e){
     console.warn('init load failed', e);
