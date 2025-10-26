@@ -191,24 +191,24 @@ function improvedParseText(text){
   return { parsed, skipped };
 }
 
-/* ========== robust fetch (accepts noCache flag) ========== */
-async function robustFetchWords(noCache = false){
+/* ========== robust fetch ========== */
+async function robustFetchWords(){
+  const timestamp = Date.now();
   const tries = ['words.txt','./words.txt'];
   try{ tries.push(location.pathname.replace(/\/[^/]*$/,'/') + 'words.txt'); }catch(e){}
   for(const p of tries){
     try{
-      const opts = noCache ? { cache: 'no-store' } : undefined;
-      const r = await fetch(p, opts);
-      if(r && r.ok) return await r.text();
+      const r = await fetch(p + '?_' + timestamp, {cache: 'no-store'});
+      if(r.ok) return await r.text();
     }catch(e){}
   }
   try{
     const user = location.hostname.split('.')[0] || '';
     const repo = (location.pathname.split('/').filter(Boolean)[0] || '');
     if(user && repo){
-      const raw = `https://raw.githubusercontent.com/${user}/${repo}/main/words.txt?t=${Date.now()}`;
-      const r2 = await fetch(raw, noCache ? { cache: 'no-store' } : undefined);
-      if(r2 && r2.ok) return await r2.text();
+      const raw = `https://raw.githubusercontent.com/${user}/${repo}/main/words.txt?_=${timestamp}`;
+      const r = await fetch(raw, {cache: 'no-store'});
+      if(r.ok) return await r.text();
     }
   }catch(e){}
   throw new Error('Не удалось загрузить words.txt автоматически');
@@ -241,13 +241,14 @@ function restoreStateAfterLoad(serverWords){
   const st = loadState();
   if(!st) return false;
   
-  // Восстанавливаем allWords из сохраненных raw
-  allWords = (st.allRaw || []).map(raw => parseSingleLineToObj(raw) || {rawLine: raw});
+  // Восстанавливаем старые allWords из saved rawLine, парся их (старые parsed)
+  const oldAllWords = (st.allRaw || []).map(raw => parseSingleLineToObj(raw) || {rawLine: raw});
   
   const serverRawSet = new Set(serverWords.map(w => w.rawLine));
+  const oldRawSet = new Set(oldAllWords.map(w => w.rawLine));
   
-  // 1. Удаляем удаленные слова
-  allWords = allWords.filter(w => serverRawSet.has(w.rawLine));
+  // 1. Удалённые слова: убираем из allWords, orderRaw, mistakes, corrects
+  allWords = oldAllWords.filter(w => serverRawSet.has(w.rawLine));
   
   orderRaw = (st.orderRaw || []).filter(r => serverRawSet.has(r));
   mistakes = (st.mistakesRaw || []).filter(r => serverRawSet.has(r));
@@ -255,7 +256,7 @@ function restoreStateAfterLoad(serverWords){
   currentRaw = (st.currentRaw && serverRawSet.has(st.currentRaw)) ? st.currentRaw : null;
   mode = st.mode || 'all';
   
-  // 2. Обновляем измененные слова
+  // 2. Обновление изменённых слов (rawLine то же, но content разный — редко, но на случай)
   const serverByRaw = new Map(serverWords.map(w => [w.rawLine, w]));
   const changedWords = [];
   
@@ -267,12 +268,12 @@ function restoreStateAfterLoad(serverWords){
     }
   });
   
-  // Сбрасываем прогресс для измененных
+  // Сброс прогресса для изменённых
   changedWords.forEach(raw => {
     mistakes = mistakes.filter(r => r !== raw);
     corrects = corrects.filter(r => r !== raw);
     if (!orderRaw.includes(raw)) {
-      orderRaw.unshift(raw); // В начало очереди
+      orderRaw.unshift(raw);
     }
   });
   
@@ -456,10 +457,9 @@ function showResetModal() {
   function onCancel() { cleanup(); }
   async function onConfirm() {
     cleanup();
-    // Сброс с перезагрузкой слов
     try{ localStorage.removeItem(STORAGE_KEY); }catch(e){}
     try {
-      const txt = await robustFetchWords(true);
+      const txt = await robustFetchWords();
       const { parsed } = improvedParseText(txt);
       allWords = parsed.slice();
       orderRaw = allWords.map(w=>w.rawLine); shuffle(orderRaw);
@@ -496,7 +496,7 @@ function finishSession(){
 /* ========== Добавление новых слов — исправленная версия ========== */
 async function addNewWords(){
   try{
-    const txt = await robustFetchWords(true);
+    const txt = await robustFetchWords();
     const { parsed } = improvedParseText(txt);
     if(!Array.isArray(parsed)) return alert('Нет парсируемых строк в words.txt');
 
@@ -525,8 +525,6 @@ async function addNewWords(){
     alert('Ошибка при добавлении слов (см. консоль).');
   }
 }
-
-/* ========== Сброс прогресса: теперь через модал ========== */
 
 /* ========== Копирование ошибок ========== */
 function copyMistakes(){
