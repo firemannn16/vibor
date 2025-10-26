@@ -111,6 +111,11 @@ const AUTO_MODAL_CLOSE_MS = 17000;
 function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
+/* ========== НОВАЯ ФУНКЦИЯ: Удаление огласовок ========== */
+function stripHarakat(text) {
+  return String(text || '').replace(/[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06DC\u06DF-\u06E4\u06E7-\u06E8\u06EA-\u06ED]/g, '');
+}
+
 /* ========== НОВАЯ ФУНКЦИЯ: Сравнение слов по содержимому ========== */
 function getWordContentHash(wordObj) {
   const rusContent = (wordObj.rusVariants || []).join('|');
@@ -197,10 +202,7 @@ async function robustFetchWords(){
   const tries = ['words.txt','./words.txt'];
   try{ tries.push(location.pathname.replace(/\/[^/]*$/,'/') + 'words.txt'); }catch(e){}
   for(const p of tries){
-    try{
-      const r = await fetch(p + '?_' + timestamp, {cache: 'no-store'});
-      if(r.ok) return await r.text();
-    }catch(e){}
+    try{ const r = await fetch(p + '?_' + timestamp, {cache: 'no-store'}); if(r.ok) return await r.text(); }catch(e){}
   }
   try{
     const user = location.hostname.split('.')[0] || '';
@@ -241,14 +243,21 @@ function restoreStateAfterLoad(serverWords){
   const st = loadState();
   if(!st) return false;
   
-  // Восстанавливаем старые allWords из saved rawLine, парся их (старые parsed)
+  // Восстанавливаем старые allWords из saved rawLine
   const oldAllWords = (st.allRaw || []).map(raw => parseSingleLineToObj(raw) || {rawLine: raw});
   
   const serverRawSet = new Set(serverWords.map(w => w.rawLine));
-  const oldRawSet = new Set(oldAllWords.map(w => w.rawLine));
   
-  // 1. Удалённые слова: убираем из allWords, orderRaw, mistakes, corrects
-  allWords = oldAllWords.filter(w => serverRawSet.has(w.rawLine));
+  // 1. Удалённые слова: фильтруем, но собираем removed для дальнейшей проверки
+  const removedOldRaws = [];
+  allWords = [];
+  oldAllWords.forEach(oldWord => {
+    if (serverRawSet.has(oldWord.rawLine)) {
+      allWords.push(oldWord);
+    } else {
+      removedOldRaws.push(oldWord.rawLine);
+    }
+  });
   
   orderRaw = (st.orderRaw || []).filter(r => serverRawSet.has(r));
   mistakes = (st.mistakesRaw || []).filter(r => serverRawSet.has(r));
@@ -256,7 +265,46 @@ function restoreStateAfterLoad(serverWords){
   currentRaw = (st.currentRaw && serverRawSet.has(st.currentRaw)) ? st.currentRaw : null;
   mode = st.mode || 'all';
   
-  // 2. Обновление изменённых слов (rawLine то же, но content разный — редко, но на случай)
+  // 2. Проверяем removed на "обновлённые" по stripped arabic
+  const serverByStripped = new Map();
+  serverWords.forEach(w => {
+    const stripped = stripHarakat(w.arabicFull || '');
+    if (stripped) serverByStripped.set(stripped, w);
+  });
+  
+  removedOldRaws.forEach(oldRaw => {
+    const oldObj = parseSingleLineToObj(oldRaw);
+    if (!oldObj) return;
+    
+    const oldStripped = stripHarakat(oldObj.arabicFull || '');
+    if (!oldStripped) return;
+    
+    const candidate = serverByStripped.get(oldStripped);
+    if (candidate) {
+      // Это обновлённое слово
+      if (!allWords.some(w => w.rawLine === candidate.rawLine)) {
+        allWords.push(candidate);
+      }
+      
+      // Заменяем ссылки на oldRaw в списках
+      orderRaw = orderRaw.map(r => r === oldRaw ? candidate.rawLine : r);
+      mistakes = mistakes.map(r => r === oldRaw ? candidate.rawLine : r);
+      corrects = corrects.map(r => r === oldRaw ? candidate.rawLine : r);
+      if (currentRaw === oldRaw) currentRaw = candidate.rawLine;
+      
+      // Сбрасываем прогресс для обновлённого
+      mistakes = mistakes.filter(r => r !== candidate.rawLine);
+      corrects = corrects.filter(r => r !== candidate.rawLine);
+      if (!orderRaw.includes(candidate.rawLine)) {
+        orderRaw.unshift(candidate.rawLine);
+      }
+      
+      // Удаляем из maps, чтобы не дублировать
+      serverByStripped.delete(oldStripped);
+    }
+  });
+  
+  // 3. Обновление изменённых слов (где rawLine то же)
   const serverByRaw = new Map(serverWords.map(w => [w.rawLine, w]));
   const changedWords = [];
   
@@ -268,7 +316,6 @@ function restoreStateAfterLoad(serverWords){
     }
   });
   
-  // Сброс прогресса для изменённых
   changedWords.forEach(raw => {
     mistakes = mistakes.filter(r => r !== raw);
     corrects = corrects.filter(r => r !== raw);
