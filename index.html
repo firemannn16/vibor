@@ -297,8 +297,8 @@ function parseSingleLineToObj(line){
   return parsed && parsed[0] ? parsed[0] : null;
 }
 /* ========== Restore logic ========== */
-function restoreStateAfterLoad(serverWords){
-  const st = loadState();
+async function restoreStateAfterLoad(serverWords){
+  const st = await loadState();
   if(!st) return false;
   const oldAllWords = (st.allRaw || []).map(raw => parseSingleLineToObj(raw) || {rawLine: raw});
   const serverRawSet = new Set(serverWords.map(w => w.rawLine));
