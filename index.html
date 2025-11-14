@@ -4,9 +4,35 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Арабский тренажёр — обновлённый</title>
-
-  <script defer src="https://cloud.umami.is/script.js" data-website-id="00fe5a4b-e3f4-442c-8593-02667045c74c"></script>
-  
+<script defer src="https://cloud.umami.is/script.js" data-website-id="00fe5a4b-e3f4-442c-8593-02667045c74c"></script>
+<script type="module">
+/* ---------- Firebase инициализация ---------- */
+const firebaseConfig = {
+  apiKey: "AIzaSyBM9YxHpD79wLzX33ya_6vZX1tC4d46Wfk",
+  authDomain: "arabic-31a1a.firebaseapp.com",
+  projectId: "arabic-31a1a",
+  storageBucket: "arabic-31a1a.firebasestorage.app",
+  messagingSenderId: "892431750830",
+  appId: "1:892431750830:web:cbe977cc62d9851a4e7f3f"
+};
+try {
+  const { initializeApp } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js');
+  const { getFirestore } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
+  window.firebaseApp = initializeApp(firebaseConfig);
+  window.firestore = getFirestore(window.firebaseApp);
+  window.firebaseEnabled = true;
+  window.firebaseModules = { doc: null, setDoc: null, getDoc: null, deleteDoc: null };
+  const firestoreModule = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js');
+  window.firebaseModules.doc = firestoreModule.doc;
+  window.firebaseModules.setDoc = firestoreModule.setDoc;
+  window.firebaseModules.getDoc = firestoreModule.getDoc;
+  window.firebaseModules.deleteDoc = firestoreModule.deleteDoc;
+  console.log('Firebase инициализирован');
+} catch(e) {
+  console.warn('Firebase не инициализирован:', e);
+  window.firebaseEnabled = false;
+}
+</script>
 <style>
   body{font-family:Arial,Helvetica,sans-serif;margin:18px;color:#111;background:#fff}
   #container{max-width:980px;margin:0 auto}
@@ -40,7 +66,6 @@
   .modal{background:#fff;border-radius:8px;padding:22px;max-width:820px;width:100%;box-shadow:0 6px 30px rgba(0,0,0,0.25)}
   .modal h2{margin:0 0 8px;font-size:22px}
   .modal .answer{font-weight:700;font-size:20px;direction:rtl;text-align:right}
-  /* Скрываем текст с числом загруженных слов */
   #count{display:none;}
   @media(max-width:560px){
     #arabic-word{font-size:2.2rem;padding:12px}
@@ -51,37 +76,31 @@
 <body>
   <div id="container">
     <h1>Тренажёр арабских слов</h1>
-
     <div id="intro">
       <p>Дуа:</p>
       <blockquote style="direction:rtl;font-size:1.8rem;margin:8px 0">رَّبِّ زِدْنِى عِلْمًۭا</blockquote>
       <p>«Господь мой! Приумножь мои знания»</p>
       <button id="did-dua" class="button">Я сделал дуа</button>
     </div>
-
     <div id="loader" class="hidden" style="margin-top:12px">
       <p class="small">Словарь загружается автоматически после нажатия «Я сделал дуа».</p>
       <div style="margin-top:8px">
         <span id="count" class="small"></span>
       </div>
     </div>
-
     <div id="trainer" class="hidden" style="margin-top:14px">
       <div id="progress">0/0 слов пройдено – 0 ошибок</div>
       <div id="arabic-word" aria-live="polite"></div>
-
       <div class="choices" id="choices">
         <button class="choice-btn" id="opt0"></button>
         <button class="choice-btn" id="opt1"></button>
         <button class="choice-btn" id="opt2"></button>
       </div>
-
       <div style="margin-top:10px">
         <button id="add-new-btn" class="button">Добавить новые слова</button>
         <button id="reset-progress-btn" class="button">Сбросить прогресс</button>
         <button id="copy-mistakes-btn" class="button">Копировать ошибки</button>
       </div>
-
       <div id="lists">
         <div>
           <h3>Правильно:</h3>
@@ -92,16 +111,13 @@
           <div id="mistake-list">—</div>
         </div>
       </div>
-
       <div id="after" class="hidden" style="margin-top:14px">
         <button id="retry-all" class="button">Пройти заново</button>
         <button id="work-mistakes" class="button hidden">Работа над ошибками</button>
       </div>
     </div>
   </div>
-
   <div id="modal-root"></div>
-
 <script>
 /* ========== Конфиг ========== */
 const STORAGE_KEY = (() => {
@@ -109,54 +125,53 @@ const STORAGE_KEY = (() => {
   return `arabic_trainer_state_v1_${encodeURIComponent(location.hostname + '_' + p)}`;
 })();
 const AUTO_MODAL_CLOSE_MS = 17000;
-
+/* ========== Firebase: Device ID ========== */
+function getDeviceId() {
+  let deviceId = localStorage.getItem('device_id');
+  if(!deviceId) {
+    deviceId = 'device_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    localStorage.setItem('device_id', deviceId);
+  }
+  return deviceId;
+}
+const DEVICE_ID = getDeviceId();
 /* ========== Утилиты ========== */
 function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-
 /* ========== НОВАЯ ФУНКЦИЯ: Удаление огласовок ========== */
 function stripHarakat(text) {
   return String(text || '').replace(/[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06DC\u06DF-\u06E4\u06E7-\u06E8\u06EA-\u06ED]/g, '');
 }
-
 /* ========== НОВАЯ ФУНКЦИЯ: Сравнение слов по содержимому ========== */
 function getWordContentHash(wordObj) {
   const rusContent = (wordObj.rusVariants || []).join('|');
   const arabContent = wordObj.arabicFull;
   return `${rusContent}|||${arabContent}`;
 }
-
 /* ========== Состояния ========== */
-let allWords = [];      // { rawLine, arabicFull, rusVariants[], pos }
-let orderRaw = [];      // remaining rawLine'ы (не показаны ещё)
-let currentRaw = null;  // текущая rawLine (показанная)
-let mistakes = [];      // rawLine[]
-let corrects = [];      // rawLine[]
-let mode = 'all';       // 'all' или 'mistakes'
-
+let allWords = [];
+let orderRaw = [];
+let currentRaw = null;
+let mistakes = [];
+let corrects = [];
+let mode = 'all';
 /* ========== DOM ========== */
 const didDuaBtn = document.getElementById('did-dua');
 const loader = document.getElementById('loader');
 const countSpan = document.getElementById('count');
-
 const trainer = document.getElementById('trainer');
 const progressDiv = document.getElementById('progress');
 const arabicWordDiv = document.getElementById('arabic-word');
 const optButtons = [document.getElementById('opt0'), document.getElementById('opt1'), document.getElementById('opt2')];
-
 const addNewBtn = document.getElementById('add-new-btn');
 const resetProgressBtn = document.getElementById('reset-progress-btn');
 const copyMistakesBtn = document.getElementById('copy-mistakes-btn');
-
 const correctListDiv = document.getElementById('correct-list');
 const mistakeListDiv = document.getElementById('mistake-list');
-
 const afterDiv = document.getElementById('after');
 const retryAllBtn = document.getElementById('retry-all');
 const workMistakesBtn = document.getElementById('work-mistakes');
-
 const modalRoot = document.getElementById('modal-root');
-
 /* ========== Парсер / нормализация ========== */
 function normalizeLine(line){
   if(!line) return '';
@@ -166,7 +181,6 @@ function normalizeLine(line){
   line = line.replace(/\s+/g,' ').trim();
   return line;
 }
-
 function detectPOS(rusVars){
   const verbEndings = ['ться','ть','ить','еть','ать','овать','нуть','ять','тись','иться','оваться','ся'];
   for(const v of rusVars){
@@ -175,7 +189,6 @@ function detectPOS(rusVars){
   }
   return 'noun';
 }
-
 function improvedParseText(text){
   text = (text||'').replace(/^\uFEFF/,'');
   const rawLines = text.split(/\r?\n/);
@@ -198,7 +211,6 @@ function improvedParseText(text){
   }
   return { parsed, skipped };
 }
-
 /* ========== robust fetch ========== */
 async function robustFetchWords(){
   const timestamp = Date.now();
@@ -218,9 +230,8 @@ async function robustFetchWords(){
   }catch(e){}
   throw new Error('Не удалось загрузить words.txt автоматически');
 }
-
-/* ========== Save / Load state (rawLine-based) ========== */
-function saveState(){
+/* ========== Save / Load state (rawLine-based) с Firebase ========== */
+async function saveState(){
   try{
     const st = {
       allRaw: allWords.map(w=>w.rawLine),
@@ -228,30 +239,69 @@ function saveState(){
       currentRaw,
       mistakesRaw: mistakes.slice(),
       correctsRaw: corrects.slice(),
-      mode
+      mode,
+      timestamp: Date.now()
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(st));
+    localStorage.setItem(STORAGE_KEY + '_backup', JSON.stringify(st));
   }catch(e){ console.error('saveState', e); }
+  if(window.firebaseEnabled && window.firestore && window.firebaseModules){
+    try {
+      const firestoreKey = `${DEVICE_ID}_${STORAGE_KEY}`;
+      const docRef = window.firebaseModules.doc(window.firestore, 'progress', firestoreKey);
+      await window.firebaseModules.setDoc(docRef, st, { merge: true });
+      console.log('Сохранено в Firestore');
+    } catch(e) { console.warn('Firestore save failed:', e); }
+  }
 }
-
-function loadState(){ try{ const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : null; }catch(e){ return null; } }
-
+async function loadState(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(raw){
+      const st = JSON.parse(raw);
+      if(st.timestamp && (Date.now() - st.timestamp) < 24*60*60*1000){
+        return st;
+      }
+    }
+  }catch(e){ console.warn('localStorage load failed', e); }
+  if(window.firebaseEnabled && window.firestore && window.firebaseModules){
+    try {
+      const firestoreKey = `${DEVICE_ID}_${STORAGE_KEY}`;
+      const docRef = window.firebaseModules.doc(window.firestore, 'progress', firestoreKey);
+      const docSnap = await window.firebaseModules.getDoc(docRef);
+      if(docSnap.exists()){
+        const data = docSnap.data();
+        console.log('Загружено из Firestore');
+        try{
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+          localStorage.setItem(STORAGE_KEY + '_backup', JSON.stringify(data));
+        }catch(e){}
+        return data;
+      }
+    } catch(e) {
+      console.warn('Firestore load failed:', e);
+      try{
+        const backup = localStorage.getItem(STORAGE_KEY + '_backup');
+        if(backup) return JSON.parse(backup);
+      }catch(e){}
+    }
+  }
+  try{
+    const backup = localStorage.getItem(STORAGE_KEY + '_backup');
+    if(backup) return JSON.parse(backup);
+  }catch(e){}
+  return null;
+}
 function parseSingleLineToObj(line){
   const { parsed } = improvedParseText(line);
   return parsed && parsed[0] ? parsed[0] : null;
 }
-
 /* ========== Restore logic ========== */
 function restoreStateAfterLoad(serverWords){
   const st = loadState();
   if(!st) return false;
-  
-  // Восстанавливаем старые allWords из saved rawLine
   const oldAllWords = (st.allRaw || []).map(raw => parseSingleLineToObj(raw) || {rawLine: raw});
-  
   const serverRawSet = new Set(serverWords.map(w => w.rawLine));
-  
-  // 1. Удалённые слова: фильтруем, но собираем removed для дальнейшей проверки
   const removedOldRaws = [];
   allWords = [];
   oldAllWords.forEach(oldWord => {
@@ -261,56 +311,40 @@ function restoreStateAfterLoad(serverWords){
       removedOldRaws.push(oldWord.rawLine);
     }
   });
-  
   orderRaw = (st.orderRaw || []).filter(r => serverRawSet.has(r));
   mistakes = (st.mistakesRaw || []).filter(r => serverRawSet.has(r));
   corrects = (st.correctsRaw || []).filter(r => serverRawSet.has(r));
   currentRaw = (st.currentRaw && serverRawSet.has(st.currentRaw)) ? st.currentRaw : null;
   mode = st.mode || 'all';
-  
-  // 2. Проверяем removed на "обновлённые" по stripped arabic
   const serverByStripped = new Map();
   serverWords.forEach(w => {
     const stripped = stripHarakat(w.arabicFull || '');
     if (stripped) serverByStripped.set(stripped, w);
   });
-  
   removedOldRaws.forEach(oldRaw => {
     const oldObj = parseSingleLineToObj(oldRaw);
     if (!oldObj) return;
-    
     const oldStripped = stripHarakat(oldObj.arabicFull || '');
     if (!oldStripped) return;
-    
     const candidate = serverByStripped.get(oldStripped);
     if (candidate) {
-      // Это обновлённое слово
       if (!allWords.some(w => w.rawLine === candidate.rawLine)) {
         allWords.push(candidate);
       }
-      
-      // Заменяем ссылки на oldRaw в списках
       orderRaw = orderRaw.map(r => r === oldRaw ? candidate.rawLine : r);
       mistakes = mistakes.map(r => r === oldRaw ? candidate.rawLine : r);
       corrects = corrects.map(r => r === oldRaw ? candidate.rawLine : r);
       if (currentRaw === oldRaw) currentRaw = candidate.rawLine;
-      
-      // Сбрасываем прогресс для обновлённого
       mistakes = mistakes.filter(r => r !== candidate.rawLine);
       corrects = corrects.filter(r => r !== candidate.rawLine);
       if (!orderRaw.includes(candidate.rawLine)) {
         orderRaw.unshift(candidate.rawLine);
       }
-      
-      // Удаляем из maps, чтобы не дублировать
       serverByStripped.delete(oldStripped);
     }
   });
-  
-  // 3. Обновление изменённых слов (где rawLine то же)
   const serverByRaw = new Map(serverWords.map(w => [w.rawLine, w]));
   const changedWords = [];
-  
   allWords.forEach((existing, index) => {
     const serverWord = serverByRaw.get(existing.rawLine);
     if (serverWord && getWordContentHash(existing) !== getWordContentHash(serverWord)) {
@@ -318,7 +352,6 @@ function restoreStateAfterLoad(serverWords){
       changedWords.push(serverWord.rawLine);
     }
   });
-  
   changedWords.forEach(raw => {
     mistakes = mistakes.filter(r => r !== raw);
     corrects = corrects.filter(r => r !== raw);
@@ -326,22 +359,18 @@ function restoreStateAfterLoad(serverWords){
       orderRaw.unshift(raw);
     }
   });
-  
   return true;
 }
-
 /* ========== Helpers ========== */
 function updateProgress(){
   const total = allWords.length;
   const done = total - orderRaw.length;
   progressDiv.textContent = `${done}/${total} слов пройдено – ${mistakes.length} ошибок`;
 }
-
 function renderLists(){
   correctListDiv.innerHTML = corrects.length ? corrects.map(c=>`<div>${escapeHtml(c)}</div>`).join('') : '—';
   mistakeListDiv.innerHTML = mistakes.length ? mistakes.map(c=>`<div>${escapeHtml(c)}</div>`).join('') : '—';
 }
-
 /* ========== Order & showing ========== */
 function prepareOrder(source='all'){
   if(source === 'all'){
@@ -355,8 +384,6 @@ function prepareOrder(source='all'){
   }
   saveState();
 }
-
-/* Рисует текущий currentRaw без сдвига (используется при восстановлении) */
 function displayCurrentRaw(){
   if(!currentRaw){
     nextWord();
@@ -367,7 +394,6 @@ function displayCurrentRaw(){
   displayArabic = displayArabic.replace(/\s*-\s*/g,' - ').trim();
   arabicWordDiv.textContent = displayArabic || '[нет арабского]';
   arabicWordDiv.setAttribute('dir','rtl');
-
   const correctText = (obj && obj.rusVariants) ? obj.rusVariants.join(', ') : '(нет перевода)';
   const distractors = findDistractorsFor(obj||{pos:'noun', rawLine:currentRaw}, 2);
   const options = [correctText, (distractors[0]?.rusVariants||[]).join(', ') || '—', (distractors[1]?.rusVariants||[]).join(', ') || '—'];
@@ -381,8 +407,6 @@ function displayCurrentRaw(){
   updateProgress();
   renderLists();
 }
-
-/* Берёт следующий элемент (удаляя его из orderRaw) */
 function nextWord(){
   if(!orderRaw || orderRaw.length === 0){
     if(mode === 'mistakes' && mistakes.length === 0){
@@ -400,7 +424,6 @@ function nextWord(){
   const raw = orderRaw.shift();
   currentRaw = raw;
   saveState();
-
   const obj = allWords.find(w=>w.rawLine===raw) || parseSingleLineToObj(raw) || { rawLine:raw, arabicFull:raw, rusVariants:[''] };
   let displayArabic = (obj.arabicFull || '').trim();
   if(!displayArabic){
@@ -410,7 +433,6 @@ function nextWord(){
   displayArabic = displayArabic.replace(/\s*-\s*/g,' - ').trim();
   arabicWordDiv.textContent = displayArabic || '[нет арабского]';
   arabicWordDiv.setAttribute('dir','rtl');
-
   const correctText = (obj.rusVariants||[]).join(', ') || '(нет перевода)';
   const distractors = findDistractorsFor(obj, 2);
   const options = [correctText, (distractors[0]?.rusVariants||[]).join(', ') || '—', (distractors[1]?.rusVariants||[]).join(', ') || '—'];
@@ -424,7 +446,6 @@ function nextWord(){
   updateProgress();
   renderLists();
 }
-
 function findDistractorsFor(correctObj, count){
   const same = allWords.filter(w => w.pos === (correctObj&&correctObj.pos) && w.rawLine !== (correctObj&&correctObj.rawLine));
   shuffle(same);
@@ -437,7 +458,6 @@ function findDistractorsFor(correctObj, count){
   while(picks.length < count) picks.push(correctObj||{rusVariants:['']});
   return picks.slice(0,count);
 }
-
 /* ========== Варианты (кнопки) ========== */
 optButtons.forEach(btn=>{
   btn.addEventListener('click', (e)=>{
@@ -459,7 +479,6 @@ optButtons.forEach(btn=>{
     }
   });
 });
-
 /* ========== Модалка 17с ========== */
 let modalTimer = null;
 function showWrongModal(arabicText, ruText, onClose){
@@ -476,9 +495,8 @@ function showWrongModal(arabicText, ruText, onClose){
   modalTimer = setTimeout(()=>{ cleanup(); if(typeof onClose==='function') onClose(); }, AUTO_MODAL_CLOSE_MS);
 }
 function closeModal(){ modalRoot.innerHTML=''; if(modalTimer){ clearTimeout(modalTimer); modalTimer=null; } }
-
 /* ========== НОВАЯ: Модал подтверждения сброса ========== */
-function showResetModal() {
+async function showResetModal() {
   closeModal();
   const overlay = document.createElement('div'); overlay.className = 'overlay';
   const modal = document.createElement('div'); modal.className = 'modal';
@@ -492,7 +510,6 @@ function showResetModal() {
   `;
   overlay.appendChild(modal);
   modalRoot.appendChild(overlay);
-
   function cleanup() {
     document.removeEventListener('keydown', onKey);
     overlay.removeEventListener('click', onOverlay);
@@ -507,7 +524,15 @@ function showResetModal() {
   function onCancel() { cleanup(); }
   async function onConfirm() {
     cleanup();
-    try{ localStorage.removeItem(STORAGE_KEY); }catch(e){}
+    try{ localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(STORAGE_KEY + '_backup'); }catch(e){}
+    if(window.firebaseEnabled && window.firestore && window.firebaseModules){
+      try {
+        const firestoreKey = `${DEVICE_ID}_${STORAGE_KEY}`;
+        const docRef = window.firebaseModules.doc(window.firestore, 'progress', firestoreKey);
+        await window.firebaseModules.deleteDoc(docRef);
+        console.log('Удалено из Firestore');
+      } catch(e) { console.warn('Firestore delete failed:', e); }
+    }
     try {
       const txt = await robustFetchWords();
       const { parsed } = improvedParseText(txt);
@@ -526,13 +551,11 @@ function showResetModal() {
       alert('Ошибка при сбросе прогресса (не удалось загрузить words.txt).');
     }
   }
-
   document.addEventListener('keydown', onKey);
   overlay.addEventListener('click', onOverlay);
   document.getElementById('modal-cancel').addEventListener('click', onCancel);
   document.getElementById('modal-confirm').addEventListener('click', onConfirm);
 }
-
 /* ========== Завершение / списки ========== */
 function finishSession(){
   const total = allWords.length || 0;
@@ -542,17 +565,14 @@ function finishSession(){
   workMistakesBtn.classList.toggle('hidden', mistakes.length === 0);
   saveState(); renderLists();
 }
-
 /* ========== Добавление новых слов — исправленная версия ========== */
 async function addNewWords(){
   try{
     const txt = await robustFetchWords();
     const { parsed } = improvedParseText(txt);
     if(!Array.isArray(parsed)) return alert('Нет парсируемых строк в words.txt');
-
     const existingSet = new Set(allWords.map(w=>w.rawLine));
     let added = 0;
-
     for(const p of parsed){
       if(!existingSet.has(p.rawLine)){
         allWords.push(p);
@@ -562,7 +582,6 @@ async function addNewWords(){
         existingSet.add(p.rawLine);
       }
     }
-
     if(added === 0){
       alert('Новых слов не найдено.');
     } else {
@@ -575,53 +594,41 @@ async function addNewWords(){
     alert('Ошибка при добавлении слов (см. консоль).');
   }
 }
-
 /* ========== Копирование ошибок ========== */
 function copyMistakes(){
   if(!mistakes.length) return alert('Ошибок нет.');
   const text = mistakes.join('\n');
   navigator.clipboard.writeText(text).then(()=> alert('Ошибки скопированы')).catch(()=> alert('Не удалось скопировать'));
 }
-
 /* ========== ИСПРАВЛЕННЫЕ: Загрузка и инициализация ========== */
 async function loadWords() {
   try {
     const txt = await robustFetchWords();
     const { parsed, skipped } = improvedParseText(txt);
     const serverWords = parsed.slice();
-    
     countSpan.textContent = `Загружено слов: ${serverWords.length}`;
-    
-    const restored = restoreStateAfterLoad(serverWords);
-    
+    const restored = await restoreStateAfterLoad(serverWords);
     if (!restored) {
       allWords = serverWords.slice();
       orderRaw = allWords.map(w=>w.rawLine); shuffle(orderRaw);
       mistakes = []; corrects = []; currentRaw = null; mode = 'all';
       saveState();
     }
-    
     if(skipped && skipped.length) console.warn('Некоторые строки не распознаны (нет дефиса):', skipped.slice(0,20));
-    
     return true;
-    
   } catch(err) {
     console.warn('Автозагрузка words.txt не удалась:', err);
     return false;
   }
 }
-
 /* ========== Обработчики UI ========== */
 didDuaBtn.addEventListener('click', async () => {
   document.getElementById('intro').classList.add('hidden');
   loader.classList.remove('hidden'); trainer.classList.add('hidden');
-
   const loaded = await loadWords();
-  
   if (loaded) {
     loader.classList.add('hidden');
     trainer.classList.remove('hidden');
-
     if(currentRaw){
       displayCurrentRaw();
     } else {
@@ -632,11 +639,9 @@ didDuaBtn.addEventListener('click', async () => {
     trainer.classList.add('hidden');
   }
 });
-
 addNewBtn.addEventListener('click', addNewWords);
 resetProgressBtn.addEventListener('click', showResetModal);
 copyMistakesBtn.addEventListener('click', copyMistakes);
-
 retryAllBtn.addEventListener('click', ()=> {
   prepareOrder('all');
   currentRaw = null; mistakes=[]; corrects=[];
@@ -644,7 +649,6 @@ retryAllBtn.addEventListener('click', ()=> {
   trainer.classList.remove('hidden'); loader.classList.add('hidden');
   nextWord();
 });
-
 workMistakesBtn.addEventListener('click', ()=> {
   if(!mistakes.length) return alert('Ошибок нет.');
   prepareOrder('mistakes');
@@ -652,8 +656,7 @@ workMistakesBtn.addEventListener('click', ()=> {
   trainer.classList.remove('hidden'); loader.classList.add('hidden');
   nextWord();
 });
-
-/* ========== Инициализация: пробуем заранее подгрузить словарь, но показываем дуа ========= */
+/* ========== Инициализация: пробуем заранее подгрузить словарь, но показываем дуа ========== */
 (async function init(){
   try{
     const loaded = await loadWords();
@@ -672,10 +675,8 @@ workMistakesBtn.addEventListener('click', ()=> {
     loader.classList.remove('hidden'); trainer.classList.add('hidden');
   }
 })();
-
-window.addEventListener('beforeunload', saveState);
-window.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') saveState(); });
-
+window.addEventListener('beforeunload', () => { saveState().catch(e => console.warn('Save on unload failed:', e)); });
+window.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') saveState().catch(e => console.warn('Save on visibility change failed:', e)); });
 </script>
 </body>
 </html>
