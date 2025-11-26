@@ -125,7 +125,6 @@ const STORAGE_KEY = (() => {
   return `arabic_trainer_state_v1_${encodeURIComponent(location.hostname + '_' + p)}`;
 })();
 const AUTO_MODAL_CLOSE_MS = 17000;
-
 /* ========== Firebase: Device ID ========== */
 function getDeviceId() {
   let deviceId = localStorage.getItem('device_id');
@@ -136,23 +135,19 @@ function getDeviceId() {
   return deviceId;
 }
 const DEVICE_ID = getDeviceId();
-
 /* ========== Утилиты ========== */
 function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-
 /* ========== НОВАЯ ФУНКЦИЯ: Удаление огласовок ========== */
 function stripHarakat(text) {
   return String(text || '').replace(/[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06DC\u06DF-\u06E4\u06E7-\u06E8\u06EA-\u06ED]/g, '');
 }
-
 /* ========== НОВАЯ ФУНКЦИЯ: Сравнение слов по содержимому ========== */
 function getWordContentHash(wordObj) {
   const rusContent = (wordObj.rusVariants || []).join('|');
   const arabContent = wordObj.arabicFull;
   return `${rusContent}|||${arabContent}`;
 }
-
 /* ========== Состояния ========== */
 let allWords = [];
 let orderRaw = [];
@@ -160,7 +155,6 @@ let currentRaw = null;
 let mistakes = [];
 let corrects = [];
 let mode = 'all';
-
 /* ========== DOM ========== */
 const didDuaBtn = document.getElementById('did-dua');
 const loader = document.getElementById('loader');
@@ -178,7 +172,6 @@ const afterDiv = document.getElementById('after');
 const retryAllBtn = document.getElementById('retry-all');
 const workMistakesBtn = document.getElementById('work-mistakes');
 const modalRoot = document.getElementById('modal-root');
-
 /* ========== Парсер / нормализация ========== */
 function normalizeLine(line){
   if(!line) return '';
@@ -218,7 +211,6 @@ function improvedParseText(text){
   }
   return { parsed, skipped };
 }
-
 /* ========== robust fetch ========== */
 async function robustFetchWords(){
   const timestamp = Date.now();
@@ -238,7 +230,6 @@ async function robustFetchWords(){
   }catch(e){}
   throw new Error('Не удалось загрузить words.txt автоматически');
 }
-
 /* ========== ИСПРАВЛЕННАЯ ФУНКЦИЯ saveState ========== */
 async function saveState(){
   let st = null;
@@ -252,10 +243,8 @@ async function saveState(){
       mode,
       timestamp: Date.now()
     };
-
     localStorage.setItem(STORAGE_KEY, JSON.stringify(st));
     localStorage.setItem(STORAGE_KEY + '_backup', JSON.stringify(st));
-
     if (window.firebaseEnabled && window.firestore && window.firebaseModules && st) {
       const firestoreKey = `${DEVICE_ID}_${STORAGE_KEY}`;
       const docRef = window.firebaseModules.doc(window.firestore, 'progress', firestoreKey);
@@ -266,7 +255,6 @@ async function saveState(){
     console.warn('Не удалось сохранить прогресс (local или firestore):', e);
   }
 }
-
 async function loadState(){
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -305,12 +293,10 @@ async function loadState(){
   }catch(e){}
   return null;
 }
-
 function parseSingleLineToObj(line){
   const { parsed } = improvedParseText(line);
   return parsed && parsed[0] ? parsed[0] : null;
 }
-
 /* ========== Restore logic ========== */
 async function restoreStateAfterLoad(serverWords){
   const st = await loadState();
@@ -376,7 +362,6 @@ async function restoreStateAfterLoad(serverWords){
   });
   return true;
 }
-
 /* ========== Helpers ========== */
 function updateProgress(){
   const total = allWords.length;
@@ -387,7 +372,6 @@ function renderLists(){
   correctListDiv.innerHTML = corrects.length ? corrects.map(c=>`<div>${escapeHtml(c)}</div>`).join('') : '—';
   mistakeListDiv.innerHTML = mistakes.length ? mistakes.map(c=>`<div>${escapeHtml(c)}</div>`).join('') : '—';
 }
-
 /* ========== Order & showing ========== */
 function prepareOrder(source='all'){
   if(source === 'all'){
@@ -475,7 +459,6 @@ function findDistractorsFor(correctObj, count){
   while(picks.length < count) picks.push(correctObj||{rusVariants:['']});
   return picks.slice(0,count);
 }
-
 /* ========== Варианты (кнопки) ========== */
 optButtons.forEach(btn=>{
   btn.addEventListener('click', (e)=>{
@@ -497,7 +480,6 @@ optButtons.forEach(btn=>{
     }
   });
 });
-
 /* ========== Модалка 17с ========== */
 let modalTimer = null;
 function showWrongModal(arabicText, ruText, onClose){
@@ -514,7 +496,6 @@ function showWrongModal(arabicText, ruText, onClose){
   modalTimer = setTimeout(()=>{ cleanup(); if(typeof onClose==='function') onClose(); }, AUTO_MODAL_CLOSE_MS);
 }
 function closeModal(){ modalRoot.innerHTML=''; if(modalTimer){ clearTimeout(modalTimer); modalTimer=null; } }
-
 /* ========== Модал подтверждения сброса ========== */
 async function showResetModal() {
   closeModal();
@@ -576,7 +557,6 @@ async function showResetModal() {
   document.getElementById('modal-cancel').addEventListener('click', onCancel);
   document.getElementById('modal-confirm').addEventListener('click', onConfirm);
 }
-
 /* ========== Завершение / списки ========== */
 function finishSession(){
   const total = allWords.length || 0;
@@ -586,7 +566,6 @@ function finishSession(){
   workMistakesBtn.classList.toggle('hidden', mistakes.length === 0);
   saveState(); renderLists();
 }
-
 /* ========== Добавление новых слов ========== */
 async function addNewWords(){
   try{
@@ -611,19 +590,26 @@ async function addNewWords(){
       updateProgress();
       alert('Добавлено новых слов: ' + added);
     }
+    // Добавляем обновление дисплея после добавления
+    if (added > 0 && orderRaw.length > 0) {
+      afterDiv.classList.add('hidden');
+      if (!currentRaw) {
+        nextWord();
+      } else {
+        displayCurrentRaw();
+      }
+    }
   }catch(e){
     console.error(e);
     alert('Ошибка при добавлении слов (см. консоль).');
   }
 }
-
 /* ========== Копирование ошибок ========== */
 function copyMistakes(){
   if(!mistakes.length) return alert('Ошибок нет.');
   const text = mistakes.join('\n');
   navigator.clipboard.writeText(text).then(()=> alert('Ошибки скопированы')).catch(()=> alert('Не удалось скопировать'));
 }
-
 /* ========== Загрузка и инициализация ========== */
 async function loadWords() {
   try {
@@ -645,7 +631,6 @@ async function loadWords() {
     return false;
   }
 }
-
 /* ========== Обработчики UI ========== */
 didDuaBtn.addEventListener('click', async () => {
   document.getElementById('intro').classList.add('hidden');
@@ -681,7 +666,6 @@ workMistakesBtn.addEventListener('click', ()=> {
   trainer.classList.remove('hidden'); loader.classList.add('hidden');
   nextWord();
 });
-
 /* ========== Инициализация ========== */
 (async function init(){
   try{
@@ -701,7 +685,6 @@ workMistakesBtn.addEventListener('click', ()=> {
     loader.classList.remove('hidden'); trainer.classList.add('hidden');
   }
 })();
-
 window.addEventListener('beforeunload', () => { saveState().catch(e => console.warn('Save on unload failed:', e)); });
 window.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') saveState().catch(e => console.warn('Save on visibility change failed:', e)); });
 </script>
