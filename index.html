@@ -125,6 +125,7 @@ const STORAGE_KEY = (() => {
   return `arabic_trainer_state_v1_${encodeURIComponent(location.hostname + '_' + p)}`;
 })();
 const AUTO_MODAL_CLOSE_MS = 17000;
+
 /* ========== Firebase: Device ID ========== */
 function getDeviceId() {
   let deviceId = localStorage.getItem('device_id');
@@ -135,19 +136,23 @@ function getDeviceId() {
   return deviceId;
 }
 const DEVICE_ID = getDeviceId();
+
 /* ========== Утилиты ========== */
 function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-/* ========== НОВАЯ ФУНКЦИЯ: Удаление огласовок ========== */
+
+/* ========== Удаление огласовок ========== */
 function stripHarakat(text) {
   return String(text || '').replace(/[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06DC\u06DF-\u06E4\u06E7-\u06E8\u06EA-\u06ED]/g, '');
 }
-/* ========== НОВАЯ ФУНКЦИЯ: Сравнение слов по содержимому ========== */
+
+/* ========== Сравнение слов по содержимому ========== */
 function getWordContentHash(wordObj) {
   const rusContent = (wordObj.rusVariants || []).join('|');
   const arabContent = wordObj.arabicFull;
   return `${rusContent}|||${arabContent}`;
 }
+
 /* ========== Состояния ========== */
 let allWords = [];
 let orderRaw = [];
@@ -155,6 +160,8 @@ let currentRaw = null;
 let mistakes = [];
 let corrects = [];
 let mode = 'all';
+let wordsLoadedOnce = false;
+
 /* ========== DOM ========== */
 const didDuaBtn = document.getElementById('did-dua');
 const loader = document.getElementById('loader');
@@ -172,6 +179,7 @@ const afterDiv = document.getElementById('after');
 const retryAllBtn = document.getElementById('retry-all');
 const workMistakesBtn = document.getElementById('work-mistakes');
 const modalRoot = document.getElementById('modal-root');
+
 /* ========== Парсер / нормализация ========== */
 function normalizeLine(line){
   if(!line) return '';
@@ -181,6 +189,7 @@ function normalizeLine(line){
   line = line.replace(/\s+/g,' ').trim();
   return line;
 }
+
 function detectPOS(rusVars){
   const verbEndings = ['ться','ть','ить','еть','ать','овать','нуть','ять','тись','ись','оваться','ся'];
   for(const v of rusVars){
@@ -189,6 +198,7 @@ function detectPOS(rusVars){
   }
   return 'noun';
 }
+
 function improvedParseText(text){
   text = (text||'').replace(/^\uFEFF/,'');
   const rawLines = text.split(/\r?\n/);
@@ -211,6 +221,7 @@ function improvedParseText(text){
   }
   return { parsed, skipped };
 }
+
 /* ========== robust fetch ========== */
 async function robustFetchWords(){
   const timestamp = Date.now();
@@ -230,7 +241,8 @@ async function robustFetchWords(){
   }catch(e){}
   throw new Error('Не удалось загрузить words.txt автоматически');
 }
-/* ========== ИСПРАВЛЕННАЯ ФУНКЦИЯ saveState ========== */
+
+/* ========== Save/Load State ========== */
 async function saveState(){
   let st = null;
   try {
@@ -252,19 +264,21 @@ async function saveState(){
       console.log('Сохранено в Firestore');
     }
   } catch(e) {
-    console.warn('Не удалось сохранить прогресс (local или firestore):', e);
+    console.warn('Не удалось сохранить прогресс:', e);
   }
 }
+
 async function loadState(){
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
     if(raw){
       const st = JSON.parse(raw);
-      if(st.timestamp && (Date.now() - st.timestamp) < 24*60*60*1000){
+      if(st.timestamp && (Date.now() - st.timestamp) < 30*24*60*60*1000){
         return st;
       }
     }
   }catch(e){ console.warn('localStorage load failed', e); }
+  
   if(window.firebaseEnabled && window.firestore && window.firebaseModules){
     try {
       const firestoreKey = `${DEVICE_ID}_${STORAGE_KEY}`;
@@ -281,29 +295,31 @@ async function loadState(){
       }
     } catch(e) {
       console.warn('Firestore load failed:', e);
-      try{
-        const backup = localStorage.getItem(STORAGE_KEY + '_backup');
-        if(backup) return JSON.parse(backup);
-      }catch(e){}
     }
   }
+  
   try{
     const backup = localStorage.getItem(STORAGE_KEY + '_backup');
     if(backup) return JSON.parse(backup);
   }catch(e){}
+  
   return null;
 }
+
 function parseSingleLineToObj(line){
   const { parsed } = improvedParseText(line);
   return parsed && parsed[0] ? parsed[0] : null;
 }
+
 /* ========== Restore logic ========== */
 async function restoreStateAfterLoad(serverWords){
   const st = await loadState();
-  if(!st) return false;
+  if(!st || !st.allRaw || st.allRaw.length === 0) return false;
+  
   const oldAllWords = (st.allRaw || []).map(raw => parseSingleLineToObj(raw) || {rawLine: raw});
   const serverRawSet = new Set(serverWords.map(w => w.rawLine));
   const removedOldRaws = [];
+  
   allWords = [];
   oldAllWords.forEach(oldWord => {
     if (serverRawSet.has(oldWord.rawLine)) {
@@ -312,16 +328,19 @@ async function restoreStateAfterLoad(serverWords){
       removedOldRaws.push(oldWord.rawLine);
     }
   });
+  
   orderRaw = (st.orderRaw || []).filter(r => serverRawSet.has(r));
   mistakes = (st.mistakesRaw || []).filter(r => serverRawSet.has(r));
   corrects = (st.correctsRaw || []).filter(r => serverRawSet.has(r));
   currentRaw = (st.currentRaw && serverRawSet.has(st.currentRaw)) ? st.currentRaw : null;
   mode = st.mode || 'all';
+  
   const serverByStripped = new Map();
   serverWords.forEach(w => {
     const stripped = stripHarakat(w.arabicFull || '');
     if (stripped) serverByStripped.set(stripped, w);
   });
+  
   removedOldRaws.forEach(oldRaw => {
     const oldObj = parseSingleLineToObj(oldRaw);
     if (!oldObj) return;
@@ -344,6 +363,7 @@ async function restoreStateAfterLoad(serverWords){
       serverByStripped.delete(oldStripped);
     }
   });
+  
   const serverByRaw = new Map(serverWords.map(w => [w.rawLine, w]));
   const changedWords = [];
   allWords.forEach((existing, index) => {
@@ -353,6 +373,7 @@ async function restoreStateAfterLoad(serverWords){
       changedWords.push(serverWord.rawLine);
     }
   });
+  
   changedWords.forEach(raw => {
     mistakes = mistakes.filter(r => r !== raw);
     corrects = corrects.filter(r => r !== raw);
@@ -360,18 +381,22 @@ async function restoreStateAfterLoad(serverWords){
       orderRaw.unshift(raw);
     }
   });
+  
   return true;
 }
+
 /* ========== Helpers ========== */
 function updateProgress(){
   const total = allWords.length;
   const done = total - orderRaw.length;
   progressDiv.textContent = `${done}/${total} слов пройдено – ${mistakes.length} ошибок`;
 }
+
 function renderLists(){
   correctListDiv.innerHTML = corrects.length ? corrects.map(c=>`<div>${escapeHtml(c)}</div>`).join('') : '—';
   mistakeListDiv.innerHTML = mistakes.length ? mistakes.map(c=>`<div>${escapeHtml(c)}</div>`).join('') : '—';
 }
+
 /* ========== Order & showing ========== */
 function prepareOrder(source='all'){
   if(source === 'all'){
@@ -385,6 +410,7 @@ function prepareOrder(source='all'){
   }
   saveState();
 }
+
 function displayCurrentRaw(){
   if(!currentRaw){
     nextWord();
@@ -395,36 +421,33 @@ function displayCurrentRaw(){
   displayArabic = displayArabic.replace(/\s*-\s*/g,' - ').trim();
   arabicWordDiv.textContent = displayArabic || '[нет арабского]';
   arabicWordDiv.setAttribute('dir','rtl');
+  
   const correctText = (obj && obj.rusVariants) ? obj.rusVariants.join(', ') : '(нет перевода)';
   const distractors = findDistractorsFor(obj||{pos:'noun', rawLine:currentRaw}, 2);
   const options = [correctText, (distractors[0]?.rusVariants||[]).join(', ') || '—', (distractors[1]?.rusVariants||[]).join(', ') || '—'];
   shuffle(options);
+  
   optButtons.forEach((btn,idx) => {
     btn.textContent = options[idx] || '';
     btn.disabled = false;
     btn.classList.remove('correct','wrong');
     btn.dataset.correct = (options[idx] === correctText) ? '1' : '0';
   });
+  
   updateProgress();
   renderLists();
 }
+
 function nextWord(){
   if(!orderRaw || orderRaw.length === 0){
-    if(mode === 'mistakes' && mistakes.length === 0){
-      arabicWordDiv.textContent = 'Ошибок нет.';
-      updateProgress();
-      return;
-    }
-    prepareOrder(mode === 'mistakes' ? 'mistakes' : 'all');
-  }
-  if(orderRaw.length === 0){
-    arabicWordDiv.textContent = 'Нет слов для тренировки.';
-    updateProgress();
+    finishSession();
     return;
   }
+  
   const raw = orderRaw.shift();
   currentRaw = raw;
   saveState();
+  
   const obj = allWords.find(w=>w.rawLine===raw) || parseSingleLineToObj(raw) || { rawLine:raw, arabicFull:raw, rusVariants:[''] };
   let displayArabic = (obj.arabicFull || '').trim();
   if(!displayArabic){
@@ -434,19 +457,23 @@ function nextWord(){
   displayArabic = displayArabic.replace(/\s*-\s*/g,' - ').trim();
   arabicWordDiv.textContent = displayArabic || '[нет арабского]';
   arabicWordDiv.setAttribute('dir','rtl');
+  
   const correctText = (obj.rusVariants||[]).join(', ') || '(нет перевода)';
   const distractors = findDistractorsFor(obj, 2);
   const options = [correctText, (distractors[0]?.rusVariants||[]).join(', ') || '—', (distractors[1]?.rusVariants||[]).join(', ') || '—'];
   shuffle(options);
+  
   optButtons.forEach((btn,idx) => {
     btn.textContent = options[idx] || '';
     btn.disabled = false;
     btn.classList.remove('correct','wrong');
     btn.dataset.correct = (options[idx] === correctText) ? '1' : '0';
   });
+  
   updateProgress();
   renderLists();
 }
+
 function findDistractorsFor(correctObj, count){
   const same = allWords.filter(w => w.pos === (correctObj&&correctObj.pos) && w.rawLine !== (correctObj&&correctObj.rawLine));
   shuffle(same);
@@ -459,48 +486,81 @@ function findDistractorsFor(correctObj, count){
   while(picks.length < count) picks.push(correctObj||{rusVariants:['']});
   return picks.slice(0,count);
 }
+
 /* ========== Варианты (кнопки) ========== */
 optButtons.forEach(btn=>{
   btn.addEventListener('click', (e)=>{
     const chosen = e.currentTarget;
     const isCorrect = chosen.dataset.correct === '1';
     optButtons.forEach(b=>b.disabled=true);
+    
     const curRaw = currentRaw;
     const obj = allWords.find(w=>w.rawLine===curRaw) || parseSingleLineToObj(curRaw) || { rawLine:curRaw, arabicFull:curRaw, rusVariants:[''] };
+    
     if(isCorrect){
       chosen.classList.add('correct');
       if(!corrects.includes(obj.rawLine)) corrects.push(obj.rawLine);
-      renderLists(); saveState();
-      setTimeout(()=>{ currentRaw=null; if(orderRaw.length===0) finishSession(); else nextWord(); }, 450);
+      renderLists(); 
+      saveState();
+      setTimeout(()=>{ 
+        currentRaw=null; 
+        if(orderRaw.length===0) finishSession(); 
+        else nextWord(); 
+      }, 450);
     } else {
       chosen.classList.add('wrong');
       if(!mistakes.includes(obj.rawLine)) mistakes.push(obj.rawLine);
-      renderLists(); saveState();
-      showWrongModal(obj.arabicFull||obj.rawLine, (obj.rusVariants||[]).join(', '), ()=>{ currentRaw=null; if(orderRaw.length===0) finishSession(); else nextWord(); });
+      renderLists(); 
+      saveState();
+      showWrongModal(obj.arabicFull||obj.rawLine, (obj.rusVariants||[]).join(', '), ()=>{ 
+        currentRaw=null; 
+        if(orderRaw.length===0) finishSession(); 
+        else nextWord(); 
+      });
     }
   });
 });
+
 /* ========== Модалка 17с ========== */
 let modalTimer = null;
 function showWrongModal(arabicText, ruText, onClose){
   closeModal();
-  const overlay = document.createElement('div'); overlay.className='overlay';
-  const modal = document.createElement('div'); modal.className='modal';
+  const overlay = document.createElement('div'); 
+  overlay.className='overlay';
+  const modal = document.createElement('div'); 
+  modal.className='modal';
   modal.innerHTML = `<h2>Неправильно</h2><div class="label">Правильный ответ:</div><div class="answer">${escapeHtml(arabicText)} — ${escapeHtml(ruText)}</div><div style="text-align:right;margin-top:12px"><button id="modal-close-btn" class="button">Закрыть (Esc)</button></div>`;
-  overlay.appendChild(modal); modalRoot.appendChild(overlay);
-  function cleanup(){ if(modalTimer){ clearTimeout(modalTimer); modalTimer=null; } document.removeEventListener('keydown', onKey); const b=document.getElementById('modal-close-btn'); if(b) b.removeEventListener('click', onBtn); if(overlay.parentNode) overlay.parentNode.removeChild(overlay); }
+  overlay.appendChild(modal); 
+  modalRoot.appendChild(overlay);
+  
+  function cleanup(){ 
+    if(modalTimer){ clearTimeout(modalTimer); modalTimer=null; } 
+    document.removeEventListener('keydown', onKey); 
+    const b=document.getElementById('modal-close-btn'); 
+    if(b) b.removeEventListener('click', onBtn); 
+    if(overlay.parentNode) overlay.parentNode.removeChild(overlay); 
+  }
   function onKey(e){ if(e.key==='Escape'){ cleanup(); if(typeof onClose==='function') onClose(); } }
   function onBtn(){ cleanup(); if(typeof onClose==='function') onClose(); }
+  
   document.addEventListener('keydown', onKey);
-  const btn = document.getElementById('modal-close-btn'); if(btn) btn.addEventListener('click', onBtn);
+  const btn = document.getElementById('modal-close-btn'); 
+  if(btn) btn.addEventListener('click', onBtn);
   modalTimer = setTimeout(()=>{ cleanup(); if(typeof onClose==='function') onClose(); }, AUTO_MODAL_CLOSE_MS);
 }
-function closeModal(){ modalRoot.innerHTML=''; if(modalTimer){ clearTimeout(modalTimer); modalTimer=null; } }
+
+function closeModal(){ 
+  modalRoot.innerHTML=''; 
+  if(modalTimer){ clearTimeout(modalTimer); modalTimer=null; } 
+}
+
 /* ========== Модал подтверждения сброса ========== */
 async function showResetModal() {
   closeModal();
-  const overlay = document.createElement('div'); overlay.className = 'overlay';
-  const modal = document.createElement('div'); modal.className = 'modal';
+  const overlay = document.createElement('div'); 
+  overlay.className = 'overlay';
+  const modal = document.createElement('div'); 
+  modal.className = 'modal';
   modal.innerHTML = `
     <div><strong>Подтверждение сброса</strong></div>
     <div style="margin-top:12px">Вы уверены? Все выученные слова и прогресс будут потеряны. Это действие нельзя отменить.</div>
@@ -511,6 +571,7 @@ async function showResetModal() {
   `;
   overlay.appendChild(modal);
   modalRoot.appendChild(overlay);
+  
   function cleanup() {
     document.removeEventListener('keydown', onKey);
     overlay.removeEventListener('click', onOverlay);
@@ -520,43 +581,50 @@ async function showResetModal() {
     if (confirmBtn) confirmBtn.removeEventListener('click', onConfirm);
     if(overlay.parentNode) overlay.parentNode.removeChild(overlay);
   }
+  
   function onKey(e) { if (e.key === 'Escape') onCancel(); }
   function onOverlay(e) { if (e.target === overlay) onCancel(); }
   function onCancel() { cleanup(); }
+  
   async function onConfirm() {
     cleanup();
-    try{ localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(STORAGE_KEY + '_backup'); }catch(e){}
+    try{ 
+      localStorage.removeItem(STORAGE_KEY); 
+      localStorage.removeItem(STORAGE_KEY + '_backup'); 
+    }catch(e){}
+    
     if(window.firebaseEnabled && window.firestore && window.firebaseModules){
       try {
         const firestoreKey = `${DEVICE_ID}_${STORAGE_KEY}`;
         const docRef = window.firebaseModules.doc(window.firestore, 'progress', firestoreKey);
         await window.firebaseModules.deleteDoc(docRef);
         console.log('Удалено из Firestore');
-      } catch(e) { console.warn('Firestore delete failed:', e); }
+      } catch(e) { 
+        console.warn('Firestore delete failed:', e); 
+      }
     }
-    try {
-      const txt = await robustFetchWords();
-      const { parsed } = improvedParseText(txt);
-      allWords = parsed.slice();
-      orderRaw = allWords.map(w=>w.rawLine); shuffle(orderRaw);
-      currentRaw = null;
-      mistakes = []; corrects = []; mode='all';
-      correctListDiv.innerHTML = '—';
-      mistakeListDiv.innerHTML = '—';
-      trainer.classList.add('hidden');
-      loader.classList.remove('hidden');
-      document.getElementById('intro').classList.remove('hidden');
-      saveState();
-    } catch(e) {
-      console.error(e);
-      alert('Ошибка при сбросе прогресса (не удалось загрузить words.txt).');
-    }
+    
+    allWords = [];
+    orderRaw = [];
+    currentRaw = null;
+    mistakes = [];
+    corrects = [];
+    mode = 'all';
+    wordsLoadedOnce = false;
+    
+    correctListDiv.innerHTML = '—';
+    mistakeListDiv.innerHTML = '—';
+    trainer.classList.add('hidden');
+    loader.classList.add('hidden');
+    document.getElementById('intro').classList.remove('hidden');
   }
+  
   document.addEventListener('keydown', onKey);
   overlay.addEventListener('click', onOverlay);
   document.getElementById('modal-cancel').addEventListener('click', onCancel);
   document.getElementById('modal-confirm').addEventListener('click', onConfirm);
 }
+
 /* ========== Завершение / списки ========== */
 function finishSession(){
   const total = allWords.length || 0;
@@ -564,16 +632,20 @@ function finishSession(){
   arabicWordDiv.textContent = `Готово! Пройдено ${done}/${total}, ошибок: ${mistakes.length}`;
   afterDiv.classList.remove('hidden');
   workMistakesBtn.classList.toggle('hidden', mistakes.length === 0);
-  saveState(); renderLists();
+  saveState(); 
+  renderLists();
 }
+
 /* ========== Добавление новых слов ========== */
 async function addNewWords(){
   try{
     const txt = await robustFetchWords();
     const { parsed } = improvedParseText(txt);
     if(!Array.isArray(parsed)) return alert('Нет парсируемых строк в words.txt');
+    
     const existingSet = new Set(allWords.map(w=>w.rawLine));
     let added = 0;
+    
     for(const p of parsed){
       if(!existingSet.has(p.rawLine)){
         allWords.push(p);
@@ -583,62 +655,88 @@ async function addNewWords(){
         existingSet.add(p.rawLine);
       }
     }
+    
     if(added === 0){
       alert('Новых слов не найдено.');
     } else {
-      saveState();
+      await saveState();
       updateProgress();
       alert('Добавлено новых слов: ' + added);
-    }
-    // Добавляем обновление дисплея после добавления
-    if (added > 0 && orderRaw.length > 0) {
-      afterDiv.classList.add('hidden');
-      if (!currentRaw) {
-        nextWord();
-      } else {
-        displayCurrentRaw();
+      
+      if (added > 0 && orderRaw.length > 0) {
+        afterDiv.classList.add('hidden');
+        if (!currentRaw) {
+          nextWord();
+        } else {
+          displayCurrentRaw();
+        }
       }
     }
   }catch(e){
     console.error(e);
-    alert('Ошибка при добавлении слов (см. консоль).');
+    alert('Ошибка при добавлении слов.');
   }
 }
+
 /* ========== Копирование ошибок ========== */
 function copyMistakes(){
   if(!mistakes.length) return alert('Ошибок нет.');
   const text = mistakes.join('\n');
   navigator.clipboard.writeText(text).then(()=> alert('Ошибки скопированы')).catch(()=> alert('Не удалось скопировать'));
 }
+
 /* ========== Загрузка и инициализация ========== */
 async function loadWords() {
+  if(wordsLoadedOnce) {
+    console.log('Слова уже были загружены, пропускаем повторную загрузку');
+    return true;
+  }
+  
   try {
     const txt = await robustFetchWords();
     const { parsed, skipped } = improvedParseText(txt);
     const serverWords = parsed.slice();
+    
     countSpan.textContent = `Загружено слов: ${serverWords.length}`;
+    
     const restored = await restoreStateAfterLoad(serverWords);
-    if (!restored) {
+    
+    if (!restored || allWords.length === 0) {
       allWords = serverWords.slice();
-      orderRaw = allWords.map(w=>w.rawLine); shuffle(orderRaw);
-      mistakes = []; corrects = []; currentRaw = null; mode = 'all';
-      saveState();
+      orderRaw = allWords.map(w=>w.rawLine); 
+      shuffle(orderRaw);
+      mistakes = []; 
+      corrects = []; 
+      currentRaw = null; 
+      mode = 'all';
+      await saveState();
     }
-    if(skipped && skipped.length) console.warn('Некоторые строки не распознаны (нет дефиса):', skipped.slice(0,20));
+    
+    if(skipped && skipped.length) {
+      console.warn('Некоторые строки не распознаны (нет дефиса):', skipped.slice(0,20));
+    }
+    
+    wordsLoadedOnce = true;
     return true;
   } catch(err) {
-    console.warn('Автозагрузка words.txt не удалась:', err);
+    console.error('Загрузка words.txt не удалась:', err);
+    loader.innerHTML = '<p style="color:red">Ошибка загрузки словаря. Проверьте файл words.txt</p>';
     return false;
   }
 }
+
 /* ========== Обработчики UI ========== */
 didDuaBtn.addEventListener('click', async () => {
   document.getElementById('intro').classList.add('hidden');
-  loader.classList.remove('hidden'); trainer.classList.add('hidden');
+  loader.classList.remove('hidden'); 
+  trainer.classList.add('hidden');
+  
   const loaded = await loadWords();
-  if (loaded) {
+  
+  if (loaded && allWords.length > 0) {
     loader.classList.add('hidden');
     trainer.classList.remove('hidden');
+    
     if(currentRaw){
       displayCurrentRaw();
     } else {
@@ -649,44 +747,77 @@ didDuaBtn.addEventListener('click', async () => {
     trainer.classList.add('hidden');
   }
 });
+
 addNewBtn.addEventListener('click', addNewWords);
 resetProgressBtn.addEventListener('click', showResetModal);
 copyMistakesBtn.addEventListener('click', copyMistakes);
+
 retryAllBtn.addEventListener('click', ()=> {
   prepareOrder('all');
-  currentRaw = null; mistakes=[]; corrects=[];
+  currentRaw = null; 
+  mistakes=[]; 
+  corrects=[];
+  afterDiv.classList.add('hidden');
   saveState();
-  trainer.classList.remove('hidden'); loader.classList.add('hidden');
   nextWord();
 });
+
 workMistakesBtn.addEventListener('click', ()=> {
   if(!mistakes.length) return alert('Ошибок нет.');
   prepareOrder('mistakes');
+  afterDiv.classList.add('hidden');
   saveState();
-  trainer.classList.remove('hidden'); loader.classList.add('hidden');
   nextWord();
 });
+
 /* ========== Инициализация ========== */
 (async function init(){
   try{
-    const loaded = await loadWords();
-    if(loaded){
-      document.getElementById('intro').classList.remove('hidden');
-      loader.classList.add('hidden'); trainer.classList.add('hidden');
-      renderLists(); updateProgress(); return;
+    const savedState = await loadState();
+    
+    if(savedState && savedState.allRaw && savedState.allRaw.length > 0){
+      loader.classList.remove('hidden');
+      document.getElementById('intro').classList.add('hidden');
+      
+      const loaded = await loadWords();
+      
+      if(loaded && allWords.length > 0){
+        loader.classList.add('hidden');
+        trainer.classList.remove('hidden');
+        
+        if(currentRaw){
+          displayCurrentRaw();
+        } else if(orderRaw.length > 0){
+          nextWord();
+        } else {
+          finishSession();
+        }
+      } else {
+        loader.classList.add('hidden');
+        document.getElementById('intro').classList.remove('hidden');
+      }
     } else {
       document.getElementById('intro').classList.remove('hidden');
-      loader.classList.add('hidden'); trainer.classList.add('hidden');
-      updateProgress(); return;
+      loader.classList.add('hidden');
+      trainer.classList.add('hidden');
     }
   }catch(e){
-    console.warn('init load failed', e);
+    console.error('Ошибка инициализации:', e);
     document.getElementById('intro').classList.remove('hidden');
-    loader.classList.remove('hidden'); trainer.classList.add('hidden');
+    loader.classList.add('hidden');
+    trainer.classList.add('hidden');
   }
 })();
-window.addEventListener('beforeunload', () => { saveState().catch(e => console.warn('Save on unload failed:', e)); });
-window.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') saveState().catch(e => console.warn('Save on visibility change failed:', e)); });
+
+window.addEventListener('beforeunload', () => { 
+  saveState().catch(e => console.warn('Save on unload failed:', e)); 
+});
+
+window.addEventListener('visibilitychange', ()=>{ 
+  if(document.visibilityState==='hidden') {
+    saveState().catch(e => console.warn('Save on visibility change failed:', e)); 
+  }
+});
 </script>
 </body>
 </html>
