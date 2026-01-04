@@ -66,7 +66,6 @@ try {
   .modal{background:#fff;border-radius:8px;padding:22px;max-width:820px;width:100%;box-shadow:0 6px 30px rgba(0,0,0,0.25)}
   .modal h2{margin:0 0 8px;font-size:22px}
   .modal .answer{font-weight:700;font-size:20px;direction:rtl;text-align:right}
-  #count{display:none;}
   @media(max-width:560px){
     #arabic-word{font-size:2.2rem;padding:12px}
     .choice-btn{font-size:1.1rem;padding:12px}
@@ -81,12 +80,6 @@ try {
       <blockquote style="direction:rtl;font-size:1.8rem;margin:8px 0">رَّبِّ زِدْنِى عِلْمًۭا</blockquote>
       <p>«Господь мой! Приумножь мои знания»</p>
       <button id="did-dua" class="button">Я сделал дуа</button>
-    </div>
-    <div id="loader" class="hidden" style="margin-top:12px">
-      <p class="small">Словарь загружается автоматически после нажатия «Я сделал дуа».</p>
-      <div style="margin-top:8px">
-        <span id="count" class="small"></span>
-      </div>
     </div>
     <div id="trainer" class="hidden" style="margin-top:14px">
       <div id="progress">0/0 слов пройдено – 0 ошибок</div>
@@ -160,12 +153,10 @@ let currentRaw = null;
 let mistakes = [];
 let corrects = [];
 let mode = 'all';
-let wordsLoadedOnce = false;
+let loadingPromise = null;
 
 /* ========== DOM ========== */
 const didDuaBtn = document.getElementById('did-dua');
-const loader = document.getElementById('loader');
-const countSpan = document.getElementById('count');
 const trainer = document.getElementById('trainer');
 const progressDiv = document.getElementById('progress');
 const arabicWordDiv = document.getElementById('arabic-word');
@@ -610,13 +601,14 @@ async function showResetModal() {
     mistakes = [];
     corrects = [];
     mode = 'all';
-    wordsLoadedOnce = false;
+    loadingPromise = null;
     
     correctListDiv.innerHTML = '—';
     mistakeListDiv.innerHTML = '—';
     trainer.classList.add('hidden');
-    loader.classList.add('hidden');
     document.getElementById('intro').classList.remove('hidden');
+    
+    loadWords();
   }
   
   document.addEventListener('keydown', onKey);
@@ -687,64 +679,58 @@ function copyMistakes(){
 
 /* ========== Загрузка и инициализация ========== */
 async function loadWords() {
-  if(wordsLoadedOnce) {
-    console.log('Слова уже были загружены, пропускаем повторную загрузку');
-    return true;
-  }
+  if(loadingPromise) return loadingPromise;
   
-  try {
-    const txt = await robustFetchWords();
-    const { parsed, skipped } = improvedParseText(txt);
-    const serverWords = parsed.slice();
-    
-    countSpan.textContent = `Загружено слов: ${serverWords.length}`;
-    
-    const restored = await restoreStateAfterLoad(serverWords);
-    
-    if (!restored || allWords.length === 0) {
-      allWords = serverWords.slice();
-      orderRaw = allWords.map(w=>w.rawLine); 
-      shuffle(orderRaw);
-      mistakes = []; 
-      corrects = []; 
-      currentRaw = null; 
-      mode = 'all';
-      await saveState();
+  loadingPromise = (async () => {
+    try {
+      const txt = await robustFetchWords();
+      const { parsed, skipped } = improvedParseText(txt);
+      const serverWords = parsed.slice();
+      
+      const restored = await restoreStateAfterLoad(serverWords);
+      
+      if (!restored || allWords.length === 0) {
+        allWords = serverWords.slice();
+        orderRaw = allWords.map(w=>w.rawLine); 
+        shuffle(orderRaw);
+        mistakes = []; 
+        corrects = []; 
+        currentRaw = null; 
+        mode = 'all';
+        await saveState();
+      }
+      
+      if(skipped && skipped.length) {
+        console.warn('Некоторые строки не распознаны (нет дефиса):', skipped.slice(0,20));
+      }
+      
+      console.log('Словарь загружен:', allWords.length, 'слов');
+      return true;
+    } catch(err) {
+      console.error('Загрузка words.txt не удалась:', err);
+      return false;
     }
-    
-    if(skipped && skipped.length) {
-      console.warn('Некоторые строки не распознаны (нет дефиса):', skipped.slice(0,20));
-    }
-    
-    wordsLoadedOnce = true;
-    return true;
-  } catch(err) {
-    console.error('Загрузка words.txt не удалась:', err);
-    loader.innerHTML = '<p style="color:red">Ошибка загрузки словаря. Проверьте файл words.txt</p>';
-    return false;
-  }
+  })();
+  
+  return loadingPromise;
 }
 
 /* ========== Обработчики UI ========== */
 didDuaBtn.addEventListener('click', async () => {
+  await loadingPromise;
+  
+  if (allWords.length === 0) {
+    alert('Не удалось загрузить словарь. Проверьте подключение к интернету.');
+    return;
+  }
+  
   document.getElementById('intro').classList.add('hidden');
-  loader.classList.remove('hidden'); 
-  trainer.classList.add('hidden');
+  trainer.classList.remove('hidden');
   
-  const loaded = await loadWords();
-  
-  if (loaded && allWords.length > 0) {
-    loader.classList.add('hidden');
-    trainer.classList.remove('hidden');
-    
-    if(currentRaw){
-      displayCurrentRaw();
-    } else {
-      nextWord();
-    }
+  if(currentRaw){
+    displayCurrentRaw();
   } else {
-    loader.classList.remove('hidden');
-    trainer.classList.add('hidden');
+    nextWord();
   }
 });
 
@@ -770,41 +756,23 @@ workMistakesBtn.addEventListener('click', ()=> {
   nextWord();
 });
 
-/* ========== Инициализация ========== */
+/* ========== Инициализация - ИСПРАВЛЕНО: загрузка в фоне ========== */
 (async function init(){
   try{
+    await loadWords();
+    
     const savedState = await loadState();
     
     if(savedState && savedState.allRaw && savedState.allRaw.length > 0){
-      loader.classList.remove('hidden');
-      document.getElementById('intro').classList.add('hidden');
-      
-      const loaded = await loadWords();
-      
-      if(loaded && allWords.length > 0){
-        loader.classList.add('hidden');
-        trainer.classList.remove('hidden');
-        
-        if(currentRaw){
-          displayCurrentRaw();
-        } else if(orderRaw.length > 0){
-          nextWord();
-        } else {
-          finishSession();
-        }
-      } else {
-        loader.classList.add('hidden');
-        document.getElementById('intro').classList.remove('hidden');
-      }
+      document.getElementById('intro').classList.remove('hidden');
+      trainer.classList.add('hidden');
     } else {
       document.getElementById('intro').classList.remove('hidden');
-      loader.classList.add('hidden');
       trainer.classList.add('hidden');
     }
   }catch(e){
     console.error('Ошибка инициализации:', e);
     document.getElementById('intro').classList.remove('hidden');
-    loader.classList.add('hidden');
     trainer.classList.add('hidden');
   }
 })();
