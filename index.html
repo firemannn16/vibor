@@ -595,20 +595,18 @@ async function showResetModal() {
       }
     }
     
-    allWords = [];
-    orderRaw = [];
+    // НЕ очищаем allWords! Только сбрасываем прогресс
+    orderRaw = allWords.map(w=>w.rawLine);
+    shuffle(orderRaw);
     currentRaw = null;
     mistakes = [];
     corrects = [];
     mode = 'all';
-    loadingPromise = null;
     
     correctListDiv.innerHTML = '—';
     mistakeListDiv.innerHTML = '—';
     trainer.classList.add('hidden');
     document.getElementById('intro').classList.remove('hidden');
-    
-    loadWords();
   }
   
   document.addEventListener('keydown', onKey);
